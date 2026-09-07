@@ -1,34 +1,37 @@
 # IntheGlobe
 
-A browser-native procedural deep-time Earth visualisation.
+IntheGlobe is a browser-based deep-time Earth visualiser built around Three.js and published GPlates reconstruction data.
 
-## Current architecture
+## Reconstruction data
+
+The application uses the GPlates Web Service with the Müller et al. 2022 global model (`MULLER2022`). The service exposes reconstructed static polygons, coastlines, point reconstruction and Euler-pole rotation information. The model lineage and time coverage are documented by EarthByte/GPlates.
+
+Historical view: the app requests the published reconstruction at the selected geological age, rather than inventing continent positions.
+
+Future view: after the present, the app starts from the present-day reconstructed geometry and applies each plate's present-day Euler rotation continuously at a constant angular rate. This is an explicit extrapolation, not a claim that the real future Earth is known.
+
+## Controls
+
+- Geological slider: 600 Ma ago → 250 Ma future.
+- Slider commits on release (`change`) rather than every drag event.
+- Play/pause with frame-rate-independent geological time.
+- 1×, 2×, 5×, 10× and 100× playback.
+- Country tracker: select a country to highlight it and have the camera follow it during playback.
+- Free camera: clears country tracking.
+- Control-panel minimise button: hides the HUD while keeping the globe interactive.
+
+## Scientific scope
+
+The reconstruction is intended to show published plate-model geometry as faithfully as the chosen model and browser representation permit. Paleogeographic reconstructions still have uncertainties, especially farther back in time, and different published models can produce different positions and plate histories.
+
+The project deliberately keeps the rendering layer separate from the data layer so another published GPlates model can be selected later without rewriting the Three.js scene.
+
+## Files
 
 - `index.html` — application shell and controls.
-- `src/main.js` — Three.js scene, camera, controls, shader loading and UI wiring.
-- `src/geology_math.js` — quaternion Euler-pole math, spherical-site generation, nearest-site lookup and Catmull-Rom interpolation.
-- `src/time_controller.js` — geological year domain, nonlinear recent-time slider and frame-rate-independent playback.
-- `src/shaders/globe.vert` — procedural fBM terrain displacement.
-- `src/shaders/globe.frag` — procedural biome, ocean/land and population overlay.
-- `src/shaders/heatmap.frag` — standalone population overlay shader for a future separate-pass implementation.
-- `src/styles.css` — responsive glass-style control HUD.
-
-## Running
-
-The site is static. Serve the repository through GitHub Pages or another static host; ES modules and shader files are loaded relative to the site root.
-
-## Important scientific limitation
-
-This repository is an engineering/procedural foundation, not a scientifically validated paleogeographic reconstruction. A genuine 600 Ma reconstruction requires published plate polygons, calibrated Euler poles, reference frames, uncertainty handling and time-dependent geological datasets. The procedural Voronoi sites and craton keyframes here are deterministic scaffolding and must not be presented as measured reconstruction data.
-
-The architecture intentionally keeps that replacement point isolated: published reconstruction data can replace the procedural site/keyframe layer without changing the renderer or time controller.
-
-## Time mapping
-
-The slider uses a piecewise mapping. The final 15% of its physical width is reserved for the interval from 2 Ma ago through 250 Ma future, with a power curve inside that interval. This prevents the ~300 ka human interval from collapsing into an imperceptible portion of the full 850 Ma range.
-
-Playback is defined as 1,000,000 geological years per real-world second at 1x. Frame advancement is `deltaSeconds × 1,000,000 × speed`, making it independent of display refresh rate.
-
-## No external map tiles
-
-The globe uses procedural geometry and GLSL. It does not fetch raster Earth/map tiles or call an image-generation API.
+- `src/main.js` — renderer, reconstruction loading, country tracking and UI.
+- `src/gplates_client.js` — GPlates Web Service client.
+- `src/time_controller.js` — time scaling and animation.
+- `src/country_tracker.js` — country definitions for the tracker.
+- `src/geology_math.js` — quaternion and spherical geometry utilities.
+- `src/shaders/` — procedural rendering shaders retained for terrain/heatmap effects.
