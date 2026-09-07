@@ -1,65 +1,10 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#020711">
-  <title>InTheGlobe — Earth Through Time</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <main id="app">
-    <canvas id="globe" aria-label="Interactive 3D Earth"></canvas>
-
-    <div id="loading" class="loading"><span class="spinner"></span><span>Building Earth…</span></div>
-
-    <section id="hud" class="hud" aria-label="Globe controls">
-      <header class="hud-header">
-        <div>
-          <div class="brand">INTHEGLOBE</div>
-          <div class="subtitle">Earth through deep time</div>
-        </div>
-        <button id="collapse" class="icon-button" title="Collapse controls" aria-label="Collapse controls">−</button>
-      </header>
-
-      <div class="year-card">
-        <div class="eyebrow">GEOLOGICAL DATE</div>
-        <output id="year">2026 CE</output>
-        <div id="epoch" class="epoch">Present day</div>
-      </div>
-
-      <label class="timeline-label" for="timeline">
-        <span>Time</span>
-        <span class="range-hint">−600 Ma to +250 Ma</span>
-      </label>
-      <input id="timeline" type="range" min="0" max="1000" value="999.9976" step="0.01" aria-label="Geological time">
-
-      <div class="control-row">
-        <button id="play" class="primary">▶ Play</button>
-        <input id="yearInput" type="number" min="-600000000" max="250000000" value="2026" step="1" aria-label="Year">
-        <button id="jumpPresent" title="Jump to present">Now</button>
-      </div>
-
-      <div id="speeds" class="speed-row" aria-label="Playback speed">
-        <button data-speed="1" class="active">1×</button>
-        <button data-speed="2">2×</button>
-        <button data-speed="5">5×</button>
-        <button data-speed="10">10×</button>
-        <button data-speed="100">100×</button>
-      </div>
-
-      <div class="section-title">Layers</div>
-      <label class="switch-row"><span><span class="dot terrain"></span>Terrain detail</span><input id="terrain" type="checkbox" checked><span class="switch"></span></label>
-      <label class="switch-row"><span><span class="dot atmosphere"></span>Atmosphere</span><input id="atmosphere" type="checkbox" checked><span class="switch"></span></label>
-      <label class="switch-row"><span><span class="dot population"></span>Population density</span><input id="heat" type="checkbox" checked><span class="switch"></span></label>
-
-      <div class="footer-hint">Drag to rotate · Scroll to zoom · Double-click to reset</div>
-    </section>
-
-    <button id="dock" class="dock" title="Open controls" aria-label="Open controls">☰</button>
-    <div class="status" id="status">INITIALISING</div>
-  </main>
-
-  <script type="module" src="js/main.js"></script>
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#020711"><title>InTheGlobe — Earth Through Time</title><link rel="stylesheet" href="styles.css"></head><body><main id="app"><canvas id="globe" aria-label="Interactive 3D Earth"></canvas><div id="loading" class="loading"><span class="spinner"></span><span>Loading Earth data…</span></div>
+<section id="hud" class="hud" aria-label="Globe controls"><header class="hud-header"><div><div class="brand">INTHEGLOBE</div><div class="subtitle">Earth through deep time</div></div><button id="collapse" class="icon-button" title="Collapse controls" aria-label="Collapse controls">−</button></header>
+<div class="year-card"><div class="eyebrow">GEOLOGICAL DATE</div><output id="year">2026 CE</output><div id="epoch" class="epoch">Holocene · present Earth</div></div>
+<label class="timeline-label" for="timeline"><span>Time</span><span class="range-hint">−600 Ma to +250 Ma</span></label><input id="timeline" type="range" min="0" max="1000" value="999.9976" step="0.01" aria-label="Geological time">
+<div class="control-row"><button id="play" class="primary">▶ Play</button><input id="yearInput" type="number" min="-600000000" max="250000000" value="2026" step="1" aria-label="Year"><button id="jumpPresent" title="Jump to present">Now</button></div>
+<div id="speeds" class="speed-row" aria-label="Playback speed"><button data-speed="1" class="active">1×</button><button data-speed="2">2×</button><button data-speed="5">5×</button><button data-speed="10">10×</button><button data-speed="100">100×</button></div>
+<div class="section-title">Layers</div><label class="switch-row"><span><span class="dot terrain"></span>Terrain detail</span><input id="terrain" type="checkbox" checked><span class="switch"></span></label><label class="switch-row"><span><span class="dot atmosphere"></span>Atmosphere</span><input id="atmosphere" type="checkbox" checked><span class="switch"></span></label><label class="switch-row"><span><span class="dot population"></span>Population density</span><input id="heat" type="checkbox" checked><span class="switch"></span></label><label class="switch-row"><span><span class="dot borders"></span>Country borders</span><input id="borders" type="checkbox" checked><span class="switch"></span></label>
+<div class="science-note"><strong>Geological data</strong><br>Past Earth uses the CAO2024 GPlates reconstruction model. Modern country borders are shown only where modern nations exist. Future Earth is a scenario, not a prediction.</div><div class="footer-hint">Drag to rotate · Scroll to zoom · Double-click to reset</div></section>
+<button id="dock" class="dock" title="Open controls" aria-label="Open controls">☰</button><div class="status" id="status">INITIALISING</div></main><script type="module" src="js/main.js"></script></body></html>
