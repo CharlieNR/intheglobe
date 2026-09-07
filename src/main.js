@@ -1,50 +1,137 @@
-import * as THREE from 'three';
-import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 import {TimeController,sliderToYear,yearToSlider,formatYear,PRESENT_YEAR,yearToGeologicalAgeMa} from './time_controller.js';
 import {staticPolygons,coastlines,assignPlateIds,currentEulerPerMa,featurePid,MODEL} from './gplates_client.js';
 import {COUNTRIES} from './country_tracker.js';
 import {loadCountries,buildCountryLayer,findCountry,availableCountryNames} from './country_renderer.js';
 
 const canvas=document.querySelector('#globe');
-const timeline=document.querySelector('#timeline'),yearInput=document.querySelector('#yearInput'),era=document.querySelector('#era'),play=document.querySelector('#play'),status=document.querySelector('#status'),countrySelect=document.querySelector('#country');
-let modernCountries=null,followedCountry=null,countryPid=null,countryEuler=null,pendingRequest=0,lastRenderedAge=null,renderTimer=null;
+const timeline=document.querySelector('#timeline');
+const yearInput=document.querySelector('#yearInput');
+const era=document.querySelector('#era');
+const play=document.querySelector('#play');
+const status=document.querySelector('#status');
+const countrySelect=document.querySelector('#country');
+const releaseFollow=document.querySelector('#releaseFollow');
+const panelToggle=document.querySelector('#panelToggle');
+
+let modernCountries=null;
+let followedCountry=null;
+let countryPid=null;
+let countryEuler=null;
+let pendingRequest=0;
+let lastRenderedAge=null;
+let renderTimer=null;
+let tc;
 const plateEulerCache=new Map();
+
+// Keep the UI usable even if optional remote data fails.
+function setStatus(text){if(status)status.textContent=text;}
+
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));renderer.setSize(window.innerWidth,window.innerHeight,false);renderer.outputColorSpace=THREE.SRGBColorSpace;
-const scene=new THREE.Scene();scene.background=new THREE.Color(0x04070b);
-const camera=new THREE.PerspectiveCamera(38,window.innerWidth/window.innerHeight,.01,20);camera.position.set(0,0,3.15);
-const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.minDistance=1.3;controls.maxDistance=8;
-scene.add(new THREE.AmbientLight(0xffffff,.65));const sun=new THREE.DirectionalLight(0xffffff,2);sun.position.set(4,2,5);scene.add(sun);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.setSize(window.innerWidth,window.innerHeight,false);
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x04070b);
+const camera=new THREE.PerspectiveCamera(38,window.innerWidth/window.innerHeight,.01,20);
+camera.position.set(0,0,3.15);
+
+// Lightweight built-in globe controls. This avoids the extra OrbitControls module/import-map
+// dependency that was preventing the application module from starting in some browsers.
+const orbit={yaw:0,pitch:0.05,distance:3.15,targetYaw:0,targetPitch:0.05,dragging:false,lastX:0,lastY:0,pointerId:null};
+function clampPitch(v){return Math.max(-1.45,Math.min(1.45,v));}
+function updateCamera(){
+  orbit.yaw+=(orbit.targetYaw-orbit.yaw)*.18;
+  orbit.pitch+=(orbit.targetPitch-orbit.pitch)*.18;
+  orbit.distance+=(orbit.targetDistance===undefined?orbit.distance:orbit.targetDistance-orbit.distance)*.18;
+  const cp=Math.cos(orbit.pitch);
+  camera.position.set(
+    orbit.distance*cp*Math.sin(orbit.yaw),
+    orbit.distance*Math.sin(orbit.pitch),
+    orbit.distance*cp*Math.cos(orbit.yaw)
+  );
+  camera.lookAt(0,0,0);
+}
+canvas.addEventListener('pointerdown',e=>{orbit.dragging=true;orbit.pointerId=e.pointerId;orbit.lastX=e.clientX;orbit.lastY=e.clientY;canvas.setPointerCapture?.(e.pointerId);});
+canvas.addEventListener('pointermove',e=>{
+  if(!orbit.dragging||e.pointerId!==orbit.pointerId)return;
+  const dx=e.clientX-orbit.lastX,dy=e.clientY-orbit.lastY;
+  orbit.lastX=e.clientX;orbit.lastY=e.clientY;
+  orbit.targetYaw-=dx*.006;
+  orbit.targetPitch=clampPitch(orbit.targetPitch-dy*.006);
+});
+const endPointer=e=>{if(e.pointerId===orbit.pointerId){orbit.dragging=false;orbit.pointerId=null;canvas.releasePointerCapture?.(e.pointerId);}};
+canvas.addEventListener('pointerup',endPointer);
+canvas.addEventListener('pointercancel',endPointer);
+canvas.addEventListener('wheel',e=>{e.preventDefault();orbit.targetDistance=Math.max(1.3,Math.min(8,(orbit.targetDistance??orbit.distance)*Math.exp(e.deltaY*.001)));},{passive:false});
+
+scene.add(new THREE.AmbientLight(0xffffff,.65));
+const sun=new THREE.DirectionalLight(0xffffff,2);sun.position.set(4,2,5);scene.add(sun);
 scene.add(new THREE.Mesh(new THREE.SphereGeometry(1,96,48),new THREE.MeshPhongMaterial({color:0x123a52,shininess:12})));
-const overlays=new THREE.Group(),countryOverlay=new THREE.Group();scene.add(overlays,countryOverlay);
+const overlays=new THREE.Group();
+const countryOverlay=new THREE.Group();
+scene.add(overlays,countryOverlay);
 const R=1.012;
-const llv=(lon,lat,r=R)=>{const a=lat*Math.PI/180,b=lon*Math.PI/180,c=Math.cos(a);return new THREE.Vector3(r*c*Math.cos(b),r*Math.sin(a),r*c*Math.sin(b))};
+const llv=(lon,lat,r=R)=>{const a=lat*Math.PI/180,b=lon*Math.PI/180,c=Math.cos(a);return new THREE.Vector3(r*c*Math.cos(b),r*Math.sin(a),r*c*Math.sin(b));};
 const rotVec=(v,euler,ma)=>v.clone().applyQuaternion(new THREE.Quaternion().setFromAxisAngle(llv(euler.lon,euler.lat,1).normalize(),THREE.MathUtils.degToRad(-euler.angleDegPerMa*ma)));
-function clearGroup(g){while(g.children.length){const c=g.children.pop();c.traverse?.(x=>{x.geometry?.dispose?.();x.material?.dispose?.()})}}
-function polygonGroup(coords,color){const g=new THREE.Group();for(const ring of coords||[]){if(!ring||ring.length<2)continue;g.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ring.map(([lon,lat])=>llv(lon,lat))),new THREE.LineBasicMaterial({color,transparent:true,opacity:.86})))}return g}
-function featureToGroup(f,color){const g=new THREE.Group(),geom=f?.geometry;if(!geom)return g;const polys=geom.type==='Polygon'?[geom.coordinates]:geom.type==='MultiPolygon'?geom.coordinates:[];for(const p of polys)g.add(polygonGroup(p,color));return g}
-const colorForPid=pid=>new THREE.Color().setHSL((Math.abs(pid)*.61803398875)%1,.26,.53);
-function populateCountries(){countrySelect.innerHTML='';const none=document.createElement('option');none.value='';none.textContent='None / free camera';countrySelect.appendChild(none);const names=modernCountries?availableCountryNames(modernCountries):COUNTRIES.filter(c=>c.name!=='None').map(c=>c.name);for(const name of names){const o=document.createElement('option');o.value=name;o.textContent=name;countrySelect.appendChild(o)}}
-function showModernCountries(){clearGroup(countryOverlay);if(!modernCountries)return;const s=followedCountry?findCountry(modernCountries,followedCountry.name):null;countryOverlay.add(buildCountryLayer(modernCountries,{selectedIso:s?.properties?.ISO_A3||s?.properties?.ADM0_A3||null}))}
-async function buildHistorical(ageMa){const serial=++pendingRequest;status.textContent=`Loading ${MODEL} · ${ageMa.toFixed(2)} Ma…`;try{const[plates,coast]=await Promise.all([staticPolygons(ageMa),coastlines(ageMa)]);if(serial!==pendingRequest)return;const next=new THREE.Group();if(ageMa>=.001)for(const f of plates.features||[])next.add(featureToGroup(f,colorForPid(featurePid(f))));for(const f of coast.features||[])next.add(featureToGroup(f,0xc0bba9));next.scale.setScalar(1.003);clearGroup(overlays);overlays.add(next);lastRenderedAge=ageMa;if(ageMa<.001){showModernCountries();status.textContent='Present day · real country borders'}else{clearGroup(countryOverlay);status.textContent=`${MODEL} · geological reconstruction`}}catch(e){console.warn('Historical reconstruction unavailable',e);status.textContent=ageMa<.001?(modernCountries?'Present day · real country borders':'Present day · globe ready'):'GPlates unavailable · keeping last valid state'}}
-async function ensureFutureEulers(fc){await Promise.all([...new Set((fc.features||[]).map(featurePid).filter(Boolean))].map(async pid=>{if(plateEulerCache.has(pid))return;try{plateEulerCache.set(pid,await currentEulerPerMa(pid))}catch(e){console.warn(`No rotation for plate ${pid}`,e)}}));return plateEulerCache}
-function transformFeatureFuture(f,eulers,years){const e=eulers.get(featurePid(f));if(!e)return f;const transform=x=>Array.isArray(x)&&typeof x[0]==='number'?(()=>{const v=rotVec(llv(x[0],x[1],1),e,years);return[THREE.MathUtils.radToDeg(Math.atan2(v.z,v.x)),THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(v.y,-1,1)))]})():x.map(transform);return {...f,geometry:{...f.geometry,coordinates:transform(structuredClone(f.geometry.coordinates))}}}
-async function buildFuture(ma){const serial=++pendingRequest;status.textContent=`Building +${ma.toFixed(2)} Ma…`;try{const base=await staticPolygons(0);if(serial!==pendingRequest)return;const eulers=await ensureFutureEulers(base);if(serial!==pendingRequest)return;const next=new THREE.Group();for(const f of base.features||[])next.add(featureToGroup(transformFeatureFuture(f,eulers,ma),colorForPid(featurePid(f))));if(serial!==pendingRequest)return;clearGroup(overlays);clearGroup(countryOverlay);overlays.add(next);lastRenderedAge=-ma;status.textContent='Future · present-day Euler extrapolation'}catch(e){console.warn('Future unavailable',e);status.textContent='Future unavailable · keeping last valid state'}}
-function scheduleRender(ageMa,immediate=false){const clamped=ageMa>=0?Math.min(600,Math.max(0,ageMa)):-Math.min(250,Math.max(0,-ageMa));const gap=lastRenderedAge===null?Infinity:Math.abs(clamped-lastRenderedAge);if(!immediate&&gap<.5)return;if(renderTimer)clearTimeout(renderTimer);renderTimer=setTimeout(()=>{renderTimer=null;if(clamped>=0)buildHistorical(clamped);else buildFuture(-clamped)},immediate?0:150)}
-const tc=new TimeController({onChange:y=>{yearInput.value=Math.round(y);era.textContent=formatYear(y);timeline.value=Math.round(yearToSlider(y)*1e6);scheduleRender(yearToGeologicalAgeMa(y),!tc.playing)}});
-timeline.addEventListener('input',()=>{const y=sliderToYear(Number(timeline.value)/1e6);yearInput.value=Math.round(y);era.textContent=formatYear(y)});
+function clearGroup(g){while(g.children.length){const c=g.children.pop();c.traverse?.(x=>{x.geometry?.dispose?.();x.material?.dispose?.()});}}
+function polygonGroup(coords,color){const g=new THREE.Group();for(const ring of coords||[]){if(!ring||ring.length<2)continue;g.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ring.map(([lon,lat])=>llv(lon,lat))),new THREE.LineBasicMaterial({color,transparent:true,opacity:.86})));}return g;}
+function featureToGroup(f,color){const g=new THREE.Group(),geom=f?.geometry;if(!geom)return g;const polys=geom.type==='Polygon'?[geom.coordinates]:geom.type==='MultiPolygon'?geom.coordinates:[];for(const p of polys)g.add(polygonGroup(p,color));return g;}
+const colorForPid=pid=>new THREE.Color().setHSL((Math.abs(pid||0)*.61803398875)%1,.26,.53);
+function populateCountries(){countrySelect.innerHTML='';const none=document.createElement('option');none.value='';none.textContent='None / free camera';countrySelect.appendChild(none);const names=modernCountries?availableCountryNames(modernCountries):COUNTRIES.filter(c=>c.name!=='None').map(c=>c.name);for(const name of names){const o=document.createElement('option');o.value=name;o.textContent=name;countrySelect.appendChild(o);}}
+function showModernCountries(){clearGroup(countryOverlay);if(!modernCountries)return;const s=followedCountry?findCountry(modernCountries,followedCountry.name):null;countryOverlay.add(buildCountryLayer(modernCountries,{selectedIso:s?.properties?.ISO_A3||s?.properties?.ADM0_A3||null}));}
+async function buildHistorical(ageMa){const serial=++pendingRequest;setStatus(`Loading ${MODEL} · ${ageMa.toFixed(2)} Ma…`);try{const[plates,coast]=await Promise.all([staticPolygons(ageMa),coastlines(ageMa)]);if(serial!==pendingRequest)return;const next=new THREE.Group();if(ageMa>=.001)for(const f of plates.features||[])next.add(featureToGroup(f,colorForPid(featurePid(f))));for(const f of coast.features||[])next.add(featureToGroup(f,0xc0bba9));next.scale.setScalar(1.003);clearGroup(overlays);overlays.add(next);lastRenderedAge=ageMa;if(ageMa<.001){showModernCountries();setStatus('Present day · real country borders');}else{clearGroup(countryOverlay);setStatus(`${MODEL} · geological reconstruction`);}}catch(e){console.warn('Historical reconstruction unavailable',e);if(ageMa<.001)setStatus(modernCountries?'Present day · real country borders':'Present day · globe ready');else setStatus('GPlates unavailable · keeping last valid state');}}
+async function ensureFutureEulers(fc){await Promise.all([...new Set((fc.features||[]).map(featurePid).filter(Boolean))].map(async pid=>{if(plateEulerCache.has(pid))return;try{plateEulerCache.set(pid,await currentEulerPerMa(pid));}catch(e){console.warn(`No rotation for plate ${pid}`,e);}}));return plateEulerCache;}
+function transformFeatureFuture(f,eulers,years){const e=eulers.get(featurePid(f));if(!e)return f;const transform=x=>Array.isArray(x)&&typeof x[0]==='number'?(()=>{const v=rotVec(llv(x[0],x[1],1),e,years);return[THREE.MathUtils.radToDeg(Math.atan2(v.z,v.x)),THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(v.y,-1,1)))];})():x.map(transform);return {...f,geometry:{...f.geometry,coordinates:transform(structuredClone(f.geometry.coordinates))}};}
+async function buildFuture(ma){const serial=++pendingRequest;setStatus(`Building +${ma.toFixed(2)} Ma…`);try{const base=await staticPolygons(0);if(serial!==pendingRequest)return;const eulers=await ensureFutureEulers(base);if(serial!==pendingRequest)return;const next=new THREE.Group();for(const f of base.features||[])next.add(featureToGroup(transformFeatureFuture(f,eulers,ma),colorForPid(featurePid(f))));if(serial!==pendingRequest)return;clearGroup(overlays);clearGroup(countryOverlay);overlays.add(next);lastRenderedAge=-ma;setStatus('Future · present-day Euler extrapolation');}catch(e){console.warn('Future unavailable',e);setStatus('Future unavailable · keeping last valid state');}}
+function scheduleRender(ageMa,immediate=false){const clamped=ageMa>=0?Math.min(600,Math.max(0,ageMa)):-Math.min(250,Math.max(0,-ageMa));const gap=lastRenderedAge===null?Infinity:Math.abs(clamped-lastRenderedAge);if(!immediate&&gap<.5)return;if(renderTimer)clearTimeout(renderTimer);renderTimer=setTimeout(()=>{renderTimer=null;if(clamped>=0)buildHistorical(clamped);else buildFuture(-clamped);},immediate?0:150);}
+
+tc=new TimeController({onChange:y=>{yearInput.value=Math.round(y);era.textContent=formatYear(y);timeline.value=Math.round(yearToSlider(y)*1e6);scheduleRender(yearToGeologicalAgeMa(y),!tc.playing);}});
+timeline.addEventListener('input',()=>{const y=sliderToYear(Number(timeline.value)/1e6);yearInput.value=Math.round(y);era.textContent=formatYear(y);});
 timeline.addEventListener('change',()=>tc.setYear(sliderToYear(Number(timeline.value)/1e6)));
 document.querySelector('#go').onclick=()=>tc.setYear(Number(yearInput.value)||PRESENT_YEAR);
-yearInput.addEventListener('keydown',e=>{if(e.key==='Enter')tc.setYear(Number(yearInput.value)||PRESENT_YEAR)});
-play.onclick=()=>{const playing=tc.toggle();play.textContent=playing?'❚❚ Pause':'▶ Play';play.classList.toggle('active',playing);if(playing)scheduleRender(yearToGeologicalAgeMa(tc.year),true)};
+yearInput.addEventListener('keydown',e=>{if(e.key==='Enter')tc.setYear(Number(yearInput.value)||PRESENT_YEAR);});
+play.onclick=()=>{const playing=tc.toggle();play.textContent=playing?'❚❚ Pause':'▶ Play';play.classList.toggle('active',playing);if(playing)scheduleRender(yearToGeologicalAgeMa(tc.year),true);};
 document.querySelector('#stepBack').onclick=()=>tc.setYear(tc.year-1000000);
 document.querySelector('#stepForward').onclick=()=>tc.setYear(tc.year+1000000);
-document.querySelectorAll('[data-speed]').forEach(b=>b.onclick=()=>{tc.setSpeed(Number(b.dataset.speed));document.querySelectorAll('[data-speed]').forEach(x=>x.classList.remove('active'));b.classList.add('active')});
+document.querySelectorAll('[data-speed]').forEach(b=>b.onclick=()=>{tc.setSpeed(Number(b.dataset.speed));document.querySelectorAll('[data-speed]').forEach(x=>x.classList.remove('active'));b.classList.add('active');});
 document.querySelector('[data-speed="1"]').classList.add('active');
-countrySelect.onchange=async()=>{const name=countrySelect.value;followedCountry=name?{name,lon:0,lat:0}:null;if(!followedCountry){countryPid=null;countryEuler=null;showModernCountries();return}const f=modernCountries&&findCountry(modernCountries,name);if(f){let sx=0,sy=0,n=0;const walk=c=>{if(Array.isArray(c)&&typeof c[0]==='number'){sx+=c[0];sy+=c[1];n++;return}for(const x of c||[])walk(x)};walk(f.geometry?.coordinates);if(n){followedCountry.lon=sx/n;followedCountry.lat=sy/n}}try{const ids=await assignPlateIds([followedCountry.lat],[followedCountry.lon]);countryPid=Array.isArray(ids)?Number(ids[0]):Number(ids?.plate_ids?.[0]??ids?.[0]);if(countryPid)countryEuler=await currentEulerPerMa(countryPid)}catch(e){countryPid=null;countryEuler=null;console.warn('Country tracking unavailable',e)}showModernCountries()};
+countrySelect.onchange=async()=>{const name=countrySelect.value;followedCountry=name?{name,lon:0,lat:0}:null;if(!followedCountry){countryPid=null;countryEuler=null;showModernCountries();return;}const f=modernCountries&&findCountry(modernCountries,name);if(f){let sx=0,sy=0,n=0;const walk=c=>{if(Array.isArray(c)&&typeof c[0]==='number'){sx+=c[0];sy+=c[1];n++;return;}for(const x of c||[])walk(x);};walk(f.geometry?.coordinates);if(n){followedCountry.lon=sx/n;followedCountry.lat=sy/n;}}try{const ids=await assignPlateIds([followedCountry.lat],[followedCountry.lon]);countryPid=Array.isArray(ids)?Number(ids[0]):Number(ids?.plate_ids?.[0]??ids?.[0]);if(countryPid)countryEuler=await currentEulerPerMa(countryPid);}catch(e){countryPid=null;countryEuler=null;console.warn('Country tracking unavailable',e);}showModernCountries();};
 document.querySelector('#heatmap').onchange=()=>{};
-document.querySelector('#releaseFollow').onclick=()=>{countrySelect.value='';followedCountry=null;countryPid=null;countryEuler=null;showModernCountries()};
-const panelToggle=document.querySelector('#panelToggle');if(panelToggle)panelToggle.onclick=()=>{const hud=document.querySelector('#hud');hud.classList.toggle('minimised');const open=!hud.classList.contains('minimised');panelToggle.setAttribute('aria-expanded',String(open));panelToggle.textContent=open?'⌄':'⌃'};
-window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight,false)});
-function render(){controls.update();if(followedCountry&&tc.playing&&countryEuler){const ma=Math.max(0,(tc.year-PRESENT_YEAR)/1e6);const desired=rotVec(llv(followedCountry.lon,followedCountry.lat,1),countryEuler,ma).normalize().multiplyScalar(2.4);camera.position.lerp(desired,.06);controls.target.lerp(desired.clone().normalize().multiplyScalar(.92),.06)}renderer.render(scene,camera);requestAnimationFrame(render)}
-(async()=>{populateCountries();yearInput.value=PRESENT_YEAR;era.textContent=formatYear(PRESENT_YEAR);timeline.value=Math.round(yearToSlider(PRESENT_YEAR)*1e6);status.textContent='Present day · globe starting';requestAnimationFrame(render);scheduleRender(0,true);try{modernCountries=await loadCountries();populateCountries();showModernCountries();status.textContent='Present day · real country borders'}catch(e){console.warn('Country data unavailable',e);status.textContent='Present day · globe ready'}tc.start()})();
+releaseFollow.onclick=()=>{countrySelect.value='';followedCountry=null;countryPid=null;countryEuler=null;showModernCountries();};
+if(panelToggle)panelToggle.onclick=()=>{const hud=document.querySelector('#hud');hud.classList.toggle('minimised');const open=!hud.classList.contains('minimised');panelToggle.setAttribute('aria-expanded',String(open));panelToggle.textContent=open?'⌄':'⌃';};
+window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight,false);});
+
+function render(){
+  updateCamera();
+  if(followedCountry&&tc.playing&&countryEuler){
+    const ma=Math.max(0,(tc.year-PRESENT_YEAR)/1e6);
+    const desired=rotVec(llv(followedCountry.lon,followedCountry.lat,1),countryEuler,ma).normalize();
+    const yaw=Math.atan2(desired.x,desired.z);
+    const pitch=Math.asin(THREE.MathUtils.clamp(desired.y,-1,1));
+    orbit.targetYaw=yaw;orbit.targetPitch=pitch;orbit.targetDistance=2.4;
+  }
+  renderer.render(scene,camera);
+  requestAnimationFrame(render);
+}
+
+(async()=>{
+  populateCountries();
+  yearInput.value=PRESENT_YEAR;
+  era.textContent=formatYear(PRESENT_YEAR);
+  timeline.value=Math.round(yearToSlider(PRESENT_YEAR)*1e6);
+  setStatus('Present day · globe starting');
+  requestAnimationFrame(render);
+  scheduleRender(0,true);
+  try{
+    modernCountries=await loadCountries();
+    populateCountries();
+    showModernCountries();
+    setStatus('Present day · real country borders');
+  }catch(e){
+    console.warn('Country data unavailable',e);
+    setStatus('Present day · globe ready');
+  }
+  tc.start();
+})();
