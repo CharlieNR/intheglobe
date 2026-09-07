@@ -1,9 +1,0 @@
-export const PRESENT_YEAR=2026;
-export const MIN_YEAR=PRESENT_YEAR-600000000;
-export const MAX_YEAR=PRESENT_YEAR+250000000;
-const RECENT_WINDOW=2000000,RECENT_WIDTH=.15;
-export function sliderToYear(u){u=Math.min(1,Math.max(0,u));const split=1-RECENT_WIDTH;if(u<split)return MIN_YEAR+(PRESENT_YEAR-MIN_YEAR)*u/split;const p=(u-split)/RECENT_WIDTH;return PRESENT_YEAR-RECENT_WINDOW+(MAX_YEAR-(PRESENT_YEAR-RECENT_WINDOW))*Math.pow(p,1.35)}
-export function yearToSlider(year){year=Math.min(MAX_YEAR,Math.max(MIN_YEAR,year));const split=1-RECENT_WIDTH;if(year<=PRESENT_YEAR-RECENT_WINDOW)return split*(year-MIN_YEAR)/(PRESENT_YEAR-MIN_YEAR);const p=Math.pow((year-(PRESENT_YEAR-RECENT_WINDOW))/(MAX_YEAR-(PRESENT_YEAR-RECENT_WINDOW)),1/1.35);return split+RECENT_WIDTH*p}
-export function yearToGeologicalAgeMa(year){return (PRESENT_YEAR-year)/1e6}
-export function formatYear(y){const rounded=Math.round(y);if(rounded===0)return '0 AD/BC';if(rounded<0)return `${Math.abs(rounded)} BC`;if(rounded===PRESENT_YEAR)return `${rounded} AD`;return `${rounded} AD`}
-export class TimeController{constructor({onChange}={}){this.year=PRESENT_YEAR;this.speed=1;this.playing=false;this.last=performance.now();this.onChange=onChange;this.frame=this.frame.bind(this)}setYear(y){this.year=Math.min(MAX_YEAR,Math.max(MIN_YEAR,y));this.onChange?.(this.year)}setSpeed(s){this.speed=s}toggle(){this.playing=!this.playing;this.last=performance.now();return this.playing}start(){requestAnimationFrame(this.frame)}frame(now){const dt=Math.min(.1,Math.max(0,(now-this.last)/1000));this.last=now;if(this.playing){this.setYear(this.year+dt*1000000*this.speed);if(this.year>=MAX_YEAR)this.playing=false}requestAnimationFrame(this.frame)}}
