@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 import {OrbitControls} from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 import {TimeController,sliderToYear,yearToSlider,formatYear,PRESENT_YEAR,yearToGeologicalAgeMa} from './time_controller.js';
 import {staticPolygons,coastlines,assignPlateIds,currentEulerPerMa,featurePid,MODEL} from './gplates_client.js';
