@@ -1,13 +1,64 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
 import {OrbitControls} from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js';
-import {TimeController} from './time_controller.js';import {fragmentShader,vertexShader,atmosphereFragment,atmosphereVertex} from './shaders.js';
-const canvas=document.querySelector('#globe'),renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
-const scene=new THREE.Scene();scene.background=new THREE.Color(0x01050c);const camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,.05,100);camera.position.set(0,0,3.05);const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.045;controls.enablePan=false;controls.minDistance=1.65;controls.maxDistance=5;controls.rotateSpeed=.45;controls.zoomSpeed=.65;
-const group=new THREE.Group();scene.add(group);const fallback=new THREE.DataTexture(new Uint8Array([80,120,150,255]),1,1,THREE.RGBAFormat);fallback.needsUpdate=true;const uniforms={uYear:{value:2026},uHeat:{value:1},uTerrain:{value:1},uHistorical:{value:0},uLight:{value:new THREE.Vector3(-.7,.35,.55)},uEarth:{value:fallback}};
-const globe=new THREE.Mesh(new THREE.SphereGeometry(1,192,128),new THREE.ShaderMaterial({vertexShader,fragmentShader,uniforms}));group.add(globe);const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(1.045,128,80),new THREE.ShaderMaterial({vertexShader:atmosphereVertex,fragmentShader:atmosphereFragment,transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending}));group.add(atmosphere);
-new THREE.TextureLoader().load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',t=>{t.colorSpace=THREE.SRGBColorSpace;uniforms.uEarth.value=t},undefined,()=>console.warn('Earth texture unavailable; using procedural fallback'));
+import {TimeController} from './time_controller.js';
+import {fragmentShader,vertexShader,atmosphereFragment,atmosphereVertex} from './shaders.js';
+import {loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,disposeLineGroup} from './geography.js';
+
+const canvas=document.querySelector('#globe');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x01050c);
+const camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,.05,100);camera.position.set(0,0,3.05);
+const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.045;controls.enablePan=false;controls.minDistance=1.65;controls.maxDistance=5;controls.rotateSpeed=.45;controls.zoomSpeed=.65;
+
+const earthGroup=new THREE.Group();scene.add(earthGroup);
+const loader=new THREE.TextureLoader();
+const fallback=new THREE.DataTexture(new Uint8Array([65,105,135,255]),1,1,THREE.RGBAFormat);fallback.needsUpdate=true;
+const earth=loader.load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',t=>{t.colorSpace=THREE.SRGBColorSpace});
+const normal=loader.load('https://threejs.org/examples/textures/planets/earth_normal_2048.jpg');
+const specular=loader.load('https://threejs.org/examples/textures/planets/earth_specular_2048.jpg');
+const uniforms={uYear:{value:2026},uHeat:{value:1},uLight:{value:new THREE.Vector3(-.7,.35,.55).normalize()},uEarth:{value:earth||fallback},uNormal:{value:normal},uSpecular:{value:specular}};
+const modernGlobe=new THREE.Mesh(new THREE.SphereGeometry(1,192,128),new THREE.ShaderMaterial({vertexShader,fragmentShader,uniforms}));earthGroup.add(modernGlobe);
+const paleoOcean=new THREE.Mesh(new THREE.SphereGeometry(.999,128,96),new THREE.MeshStandardMaterial({color:0x0a3d63,roughness:.35,metalness:.05}));paleoOcean.visible=false;earthGroup.add(paleoOcean);
+const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(1.045,128,80),new THREE.ShaderMaterial({vertexShader:atmosphereVertex,fragmentShader:atmosphereFragment,transparent:true,side:THREE.BackSide,depthWrite:false,blending:THREE.AdditiveBlending}));earthGroup.add(atmosphere);
+
 const starGeo=new THREE.BufferGeometry(),stars=[];for(let i=0;i<1800;i++){const r=12+Math.random()*18,a=Math.random()*Math.PI*2,b=Math.acos(2*Math.random()-1);stars.push(r*Math.sin(b)*Math.cos(a),r*Math.cos(b),r*Math.sin(b)*Math.sin(a))}starGeo.setAttribute('position',new THREE.Float32BufferAttribute(stars,3));scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:0xffffff,size:.035,sizeAttenuation:true,transparent:true,opacity:.55})));
-const status=document.querySelector('#status');const time=new TimeController({slider:document.querySelector('#timeline'),yearInput:document.querySelector('#yearInput'),yearOutput:document.querySelector('#year'),epoch:document.querySelector('#epoch'),playButton:document.querySelector('#play'),onChange:y=>{uniforms.uYear.value=y;uniforms.uHistorical.value=Math.min(1,Math.abs(y-2026)/80000000);status.textContent=`MODEL · ${Math.round(y).toLocaleString()} YR`}});
-document.querySelector('#heat').addEventListener('change',e=>uniforms.uHeat.value=e.target.checked?1:0);document.querySelector('#terrain').addEventListener('change',e=>uniforms.uTerrain.value=e.target.checked?1:0);document.querySelector('#atmosphere').addEventListener('change',e=>atmosphere.visible=e.target.checked);document.querySelector('#jumpPresent').addEventListener('click',()=>time.setYear(2026));
-const hud=document.querySelector('#hud');document.querySelector('#collapse').addEventListener('click',()=>hud.classList.add('hidden'));document.querySelector('#dock').addEventListener('click',()=>hud.classList.remove('hidden'));canvas.addEventListener('dblclick',()=>{controls.reset();camera.position.set(0,0,3.05)});
-function frame(now){time.update(now);controls.update();const geologicalDrift=(time.year-2026)/1000000;group.rotation.y=THREE.MathUtils.euclideanModulo(geologicalDrift*.0007,Math.PI*2);renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.render(scene,camera);requestAnimationFrame(frame)}requestAnimationFrame(frame);setTimeout(()=>document.querySelector('#loading').classList.add('done'),350);window.addEventListener('resize',()=>renderer.setPixelRatio(Math.min(devicePixelRatio,2)));
+
+let countryBorders=null,paleoLines=null,paleoLand=null,lastPaleoSlice=null,requestSerial=0;
+const status=document.querySelector('#status');
+const countryToggle=document.querySelector('#borders');
+loadModernCountryBorders().then(g=>{countryBorders=g;earthGroup.add(g);updateVisibility(time?.year??2026)}).catch(e=>console.warn('Country boundary data unavailable',e));
+
+async function updateGeography(year){
+  const serial=++requestSerial;const historical=year< -10000;const future=year>2026;
+  modernGlobe.visible=!historical; paleoOcean.visible=historical; atmosphere.visible=document.querySelector('#atmosphere').checked;
+  if(countryBorders)countryBorders.visible=!!countryToggle.checked&&!historical&&!future;
+  if(future){status.textContent='SPECULATIVE FUTURE · PANGEA ULTIMA SCENARIO';if(paleoLines)paleoLines.visible=false;if(paleoLand)paleoLand.visible=false;return}
+  if(!historical){if(paleoLines)paleoLines.visible=false;if(paleoLand)paleoLand.visible=false;status.textContent=`MODERN EARTH · ${Math.round(year).toLocaleString()} CE`;return}
+  const ageMa=Math.round((-year/1e6)*2)/2;const sliceYear=-ageMa*1e6;
+  if(sliceYear===lastPaleoSlice){if(paleoLines)paleoLines.visible=true;if(paleoLand)paleoLand.visible=true;return}
+  status.textContent=`RECONSTRUCTING · ${ageMa.toLocaleString()} Ma`;
+  try{
+    const [lines,land]=await Promise.all([loadPaleoCoastlines(sliceYear,'CAO2024'),loadPaleoLand(sliceYear,'CAO2024')]);
+    if(serial!==requestSerial){disposeLineGroup(lines);disposeLineGroup(land);return}
+    if(paleoLines){earthGroup.remove(paleoLines);disposeLineGroup(paleoLines)}
+    if(paleoLand){earthGroup.remove(paleoLand);disposeLineGroup(paleoLand)}
+    paleoLines=lines;paleoLand=land;earthGroup.add(paleoOcean,paleoLand,paleoLines);lastPaleoSlice=sliceYear;
+    paleoLines.visible=true;paleoLand.visible=true;
+    status.textContent=`CAO2024 RECONSTRUCTION · ${ageMa.toLocaleString()} Ma`;
+  }catch(e){console.error(e);status.textContent='PALEOGEOGRAPHY DATA UNAVAILABLE'}
+}
+
+let pendingTimer=0;
+const time=new TimeController({slider:document.querySelector('#timeline'),yearInput:document.querySelector('#yearInput'),yearOutput:document.querySelector('#year'),epoch:document.querySelector('#epoch'),playButton:document.querySelector('#play'),onChange:y=>{uniforms.uYear.value=y;clearTimeout(pendingTimer);pendingTimer=setTimeout(()=>updateGeography(y),90)}});
+
+document.querySelector('#heat').addEventListener('change',e=>uniforms.uHeat.value=e.target.checked?1:0);
+document.querySelector('#terrain').addEventListener('change',e=>{});
+document.querySelector('#atmosphere').addEventListener('change',e=>atmosphere.visible=e.target.checked);
+document.querySelector('#jumpPresent').addEventListener('click',()=>time.setYear(2026));
+countryToggle.addEventListener('change',()=>{if(countryBorders)countryBorders.visible=countryToggle.checked&&time.year>=-10000&&time.year<=2026});
+const hud=document.querySelector('#hud');document.querySelector('#collapse').addEventListener('click',()=>hud.classList.add('hidden'));document.querySelector('#dock').addEventListener('click',()=>hud.classList.remove('hidden'));
+canvas.addEventListener('dblclick',()=>{controls.reset();camera.position.set(0,0,3.05)});
+
+function frame(now){time.update(now);controls.update();renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.render(scene,camera);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);setTimeout(()=>document.querySelector('#loading').classList.add('done'),700);window.addEventListener('resize',()=>renderer.setPixelRatio(Math.min(devicePixelRatio,2)));
