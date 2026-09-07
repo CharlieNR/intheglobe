@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 
 // Natural Earth is vector boundary data, not raster map tiles. It is public-domain
 // cartographic data and is used here only for modern political boundaries.
@@ -45,7 +45,7 @@ function centroidOfFeature(feature){
   let sx=0,sy=0,n=0;
   const consume=(coords)=>{
     if(!Array.isArray(coords))return;
-    if(typeof coords[0]==='number'){sx+=coords[0];sy+=coords[1];n++;return}
+    if(typeof coords[0]==='number'){sx+=coords[0];sy+=coords[1];n++;return;}
     coords.forEach(consume);
   };
   consume(geom.coordinates);
@@ -70,8 +70,6 @@ function makeCountryMesh(feature,color){
   for(const polygon of polygons){
     const ring=normalizeRing(polygon?.[0]);
     if(ring.length<4)continue;
-    // Project locally to longitude/latitude for robust triangulation, then map the
-    // triangulated vertices back onto the sphere.
     const pts=ring.map(([lon,lat])=>new THREE.Vector2((lon-center[0])*Math.cos(THREE.MathUtils.degToRad(center[1])),lat-center[1]));
     const tris=THREE.ShapeUtils.triangulateShape(pts,[]);
     for(const [lon,lat] of ring)positions.push(...spherePoint(lon,lat).toArray());
