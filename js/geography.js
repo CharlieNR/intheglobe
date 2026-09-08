@@ -1,7 +1,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
 import {feature} from 'https://cdn.jsdelivr.net/npm/topojson-client@3/+esm';
 const GWS='https://gws.gplates.org/reconstruct/';const MODERN_COUNTRIES='https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';const CACHE_DB='intheglobe-cache-v3';const CACHE_STORE='json';const CACHE_VERSION=3;const TIMELINE_META='intheglobe.timeline.cache.v3';
-function geoPoint(lon,lat,r=1){const a=THREE.MathUtils.degToRad(lat),b=THREE.MathUtils.degToRad(lon);return new THREE.Vector3(Math.cos(a)*Math.cos(b),Math.sin(a),Math.cos(a)*Math.sin(b)).multiplyScalar(r)}
+function geoPoint(lon,lat,r=1){const a=THREE.MathUtils.degToRad(lat),b=THREE.MathUtils.degToRad(180-lon);return new THREE.Vector3(Math.cos(a)*Math.cos(b),Math.sin(a),Math.cos(a)*Math.sin(b)).multiplyScalar(r)}
 function geometries(g,out=[]){if(!g)return out;if(g.type==='FeatureCollection')g.features.forEach(f=>geometries(f.geometry,out));else if(g.type==='Feature')geometries(g.geometry,out);else out.push(g);return out}
 function polygonRings(geometry){const out=[];for(const g of geometries(geometry)){if(g.type==='Polygon')out.push(g.coordinates);else if(g.type==='MultiPolygon')g.coordinates.forEach(p=>out.push(p))}return out}
 function addGeometryLines(group,geometry,radius,material){for(const g of geometries(geometry)){const lines=g.type==='LineString'?[g.coordinates]:g.type==='MultiLineString'?g.coordinates:g.type==='Polygon'?g.coordinates:g.type==='MultiPolygon'?g.coordinates.flat(1):[];for(const ring of lines){if(!ring||ring.length<2)continue;const pts=ring.map(([lon,lat])=>geoPoint(lon,lat,radius));group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),material))}}}
