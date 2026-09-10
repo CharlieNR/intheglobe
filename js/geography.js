@@ -14,18 +14,25 @@ function geometries(g,out=[]){if(!g)return out;if(g.type==='FeatureCollection')g
 function addGeometryLines(group,geometry,radius,material){const positions=[];for(const g of geometries(geometry)){const lines=g.type==='LineString'?[g.coordinates]:g.type==='MultiLineString'?g.coordinates:g.type==='Polygon'?g.coordinates:g.type==='MultiPolygon'?g.coordinates.flat(1):[];for(const ring of lines){if(!ring||ring.length<2)continue;for(let i=0;i<ring.length-1;i++){const a=geoPoint(ring[i][0],ring[i][1],radius),b=geoPoint(ring[i+1][0],ring[i+1][1],radius);positions.push(a.x,a.y,a.z,b.x,b.y,b.z)}}}if(!positions.length)return;const geometryBuffer=new THREE.BufferGeometry();geometryBuffer.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geometryBuffer.computeBoundingSphere();const line=new THREE.LineSegments(geometryBuffer,material);line.renderOrder=20;group.add(line)}
 
 // Geographic data is rasterised into an equirectangular texture before it reaches
-// WebGL. This is deliberately used for modern and paleo geography: triangulating
-// complex spherical polygons into enormous CPU/GPU meshes was the main source of
-// malformed polygons and, after enough timeline frames, browser/WebGL memory loss.
+// WebGL. This avoids triangulating large spherical polygons into fragile meshes.
 function makeGeoTexture(data,{fill=null,stroke='rgba(70,183,255,0.90)',lineWidth=2,size=2048}={}){
   const canvas=document.createElement('canvas');canvas.width=size;canvas.height=Math.round(size/2);const ctx=canvas.getContext('2d');
   if(!ctx)throw new Error('Canvas 2D unavailable');
   const projection=geoEquirectangular().scale(size/(2*Math.PI)).translate([size/2,canvas.height/2]);
   const path=geoPath(projection,ctx);
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  if(fill){ctx.fillStyle=fill}
+  if(fill)ctx.fillStyle=fill;
   if(stroke&&lineWidth>0){ctx.strokeStyle=stroke;ctx.lineWidth=lineWidth;ctx.lineJoin='round';ctx.lineCap='round'}
-  if(data){ctx.beginPath();path(data);if(fill)ctx.fill();if(stroke&&lineWidth>0)ctx.stroke()}
+  if(data){
+    ctx.beginPath();
+    path(data);
+    // GPlates coastline polygons can use winding directions that cause the
+    // canvas non-zero rule to fill the ocean instead of the land. Even-odd
+    // makes the polygon regions themselves the filled regions regardless of
+    // ring winding and preserves holes.
+    if(fill)ctx.fill('evenodd');
+    if(stroke&&lineWidth>0)ctx.stroke();
+  }
   const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.needsUpdate=true;texture.minFilter=THREE.LinearFilter;texture.magFilter=THREE.LinearFilter;
   return texture;
 }
@@ -45,19 +52,25 @@ export async function loadModernCountryOverlay(radius=1.012){const countries=awa
 // Only a handful of raw paleo frames are kept in JS memory. Prefetching writes the
 // complete timeline to IndexedDB, but does not retain every GeoJSON object in RAM.
 const paleoCache=new Map();
+const paleoPromiseCache=new Map();
 const MAX_LIVE_PALEO_DATA=3;
 function rememberPaleoData(key,value){paleoCache.delete(key);paleoCache.set(key,value);while(paleoCache.size>MAX_LIVE_PALEO_DATA)paleoCache.delete(paleoCache.keys().next().value)}
 async function getPaleoData(year,model='CAO2024'){
   const age=Math.max(0,Math.min(1800,-year/1e6));
   const key=`paleo:${model}:${Math.round(age*10)/10}`;
   if(paleoCache.has(key)){const value=paleoCache.get(key);paleoCache.delete(key);paleoCache.set(key,value);return value}
-  const persisted=await persistentGet(key);if(persisted){rememberPaleoData(key,persisted);return persisted}
-  const r=await fetch(`${GWS}coastlines/?time=${encodeURIComponent(age)}&model=${encodeURIComponent(model)}`,{cache:'no-store'});if(!r.ok)throw new Error(`GPlates HTTP ${r.status}`);
-  const data=await r.json();await persistentPut(key,data);rememberPaleoData(key,data);return data;
+  if(paleoPromiseCache.has(key))return paleoPromiseCache.get(key);
+  const promise=(async()=>{
+    const persisted=await persistentGet(key);if(persisted){rememberPaleoData(key,persisted);return persisted}
+    const r=await fetch(`${GWS}coastlines/?time=${encodeURIComponent(age)}&model=${encodeURIComponent(model)}`,{cache:'no-store'});if(!r.ok)throw new Error(`GPlates HTTP ${r.status}`);
+    const data=await r.json();await persistentPut(key,data);rememberPaleoData(key,data);return data;
+  })();
+  paleoPromiseCache.set(key,promise);
+  try{return await promise}finally{if(paleoPromiseCache.get(key)===promise)paleoPromiseCache.delete(key)}
 }
 
-// Rasterising the paleo land avoids ShapeUtils triangulating huge lon/lat polygons.
-// d3-geo performs the spherical projection correctly, including difficult longitudes.
+// GPlates returns reconstructed coastline polygons, so the same data can safely
+// provide both the land mask and the visible coastline stroke.
 export async function loadPaleoLand(year,model='CAO2024',radius=1.002){const data=await getPaleoData(year,model);return textureGlobe(data,radius,{fill:'rgba(158,180,141,1)',stroke:null,lineWidth:0,size:2048})}
 export async function loadPaleoCoastlines(year,model='CAO2024',radius=1.008){const data=await getPaleoData(year,model);return textureGlobe(data,radius,{fill:null,stroke:'rgba(217,243,230,0.90)',lineWidth:1.25,size:2048})}
 
