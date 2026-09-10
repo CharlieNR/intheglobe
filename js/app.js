@@ -1,7 +1,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
 import{OrbitControls}from'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 import{TimeController}from'./time_controller.js';
-import{loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,prefetchPaleoFrames,loadReconstructedCountry,makeCountryHighlight,disposeLineGroup,timelineAges,timelineBracket,timelineCachedProgress}from'./geography.js';
+import{loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,prefetchPaleoFrames,loadReconstructedCountry,makeCountryHighlight,disposeLineGroup,timelineAges,timelineBracket,timelineCachedProgress}from'./geography.js?v=20260910-1';
 
 const canvas=document.querySelector('#globe'),loading=document.querySelector('#loading'),status=document.querySelector('#status'),followSelect=document.querySelector('#followCountry'),countrySearch=document.querySelector('#countrySearch'),bufferAmount=document.querySelector('#bufferAmount'),bufferFill=document.querySelector('#bufferFill'),bufferNote=document.querySelector('#bufferNote'),countryToggle=document.querySelector('#borders'),atmosphereToggle=document.querySelector('#atmosphere'),STORAGE_KEY='intheglobe.preferences.v1';
 const savedPreferences=readPreferences();let bufferProgress=timelineCachedProgress(timelineAges().length),prefetchFinished=false,modernCountries=null,countryBorders=null,paleoFrameA=null,paleoFrameB=null,paleoFrameKey='',paleoRequestKey='',paleoRequestSerial=0,followFrameA=null,followFrameB=null,followFrameKey='',followRequestSerial=0,followRequestBusy=false,followDesiredKey='',followDesiredYear=null,followRequestTimer=0;
