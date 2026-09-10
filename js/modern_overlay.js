@@ -1,5 +1,5 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
-import {loadModernCountryOverlay} from './geography.js?v=20260910-1';
+import {loadModernCountryOverlay} from './geography.js?v=20260910-3';
 
 const STORAGE_KEY='intheglobe.preferences.v1';
 const OVERLAY_ID='modernCountries';
