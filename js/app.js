@@ -1,29 +1,160 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
 import{OrbitControls}from'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 import{TimeController}from'./time_controller.js';
-import{loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,loadReconstructedCountry,makeCountryHighlight,disposeLineGroup,timelineBracket}from'./geography.js?v=20260910-6';
+import{loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,loadReconstructedCountry,makeCountryHighlight,disposeLineGroup,timelineBracket,timelineAges,prefetchPaleoFrames}from'./geography.js?v=20260911-1';
+
 const canvas=document.querySelector('#globe'),loading=document.querySelector('#loading'),status=document.querySelector('#status'),followSelect=document.querySelector('#followCountry'),countrySearch=document.querySelector('#countrySearch'),bufferAmount=document.querySelector('#bufferAmount'),bufferFill=document.querySelector('#bufferFill'),bufferNote=document.querySelector('#bufferNote'),countryToggle=document.querySelector('#borders'),atmosphereToggle=document.querySelector('#atmosphere'),STORAGE_KEY='intheglobe.preferences.v1';
-const savedPreferences=readPreferences();let modernCountries=null,countryBorders=null,paleoFrameA=null,paleoFrameB=null,paleoFrameKey='',paleoRequestKey='',paleoRequestSerial=0,followFrameA=null,followFrameB=null,followFrameKey='',followRequestSerial=0,followRequestBusy=false,followDesiredKey='',followDesiredYear=null,followRequestTimer=0;
+const savedPreferences=readPreferences();
+let modernCountries=null,countryBorders=null,paleoFrameA=null,paleoFrameB=null,paleoFrameKey='',paleoRequestKey='',paleoRequestSerial=0,followFrameA=null,followFrameB=null,followFrameKey='',followRequestSerial=0,followRequestBusy=false,followDesiredKey='',followDesiredYear=null,followRequestTimer=0,bufferProgress=0,prefetchFinished=false;
 const log=(...a)=>window.__intheglobeLog?.(...a);
 log('APP module executing');
-function readPreferences(){try{const raw=localStorage.getItem(STORAGE_KEY);return raw?JSON.parse(raw)||{}:{} }catch{return{}}}function savePreferences(patch){try{Object.assign(savedPreferences,patch);localStorage.setItem(STORAGE_KEY,JSON.stringify(savedPreferences))}catch{}}
+
+function readPreferences(){try{const raw=localStorage.getItem(STORAGE_KEY);return raw?JSON.parse(raw)||{}:{} }catch{return{}}}
+function savePreferences(patch){try{Object.assign(savedPreferences,patch);localStorage.setItem(STORAGE_KEY,JSON.stringify(savedPreferences))}catch{}}
 function logError(message){if(status)status.textContent='READY · DATA DEGRADED';log('APP ERROR',message);console.error('[InTheGlobe]',message)}
-function setOpacity(group,opacity){if(!group)return;const v=Math.max(0,Math.min(1,opacity));group.traverse(o=>{if(!o.material)return;for(const m of Array.isArray(o.material)?o.material:[o.material]){m.transparent=v<.999;m.opacity=v;m.depthWrite=v>.94}})}function blend(a,b,t){if(!a)return;const e=(Math.max(0,Math.min(1,t)))**2*(3-2*Math.max(0,Math.min(1,t)));setOpacity(a,1-e);if(b&&b!==a)setOpacity(b,e)}function countryByName(name){return modernCountries?.features.find(f=>f.properties?.name===name)||null}
-window.addEventListener('error',e=>{console.error(e.error||e.message);logError(e.message||'Unknown window error')});window.addEventListener('unhandledrejection',e=>{console.error(e.reason);logError(e.reason?.message||e.reason||'Unknown promise rejection')});
-let renderer;try{renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.5));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.NoToneMapping;canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();status.textContent='WEBGL CONTEXT LOST · RELOAD PAGE';log('WEBGL CONTEXT LOST')});canvas.addEventListener('webglcontextrestored',()=>{status.textContent='WEBGL CONTEXT RESTORED · RELOADING';log('WEBGL CONTEXT RESTORED');location.reload()});log('WebGL renderer created')}catch(error){logError(error);if(loading)loading.classList.add('done');throw error}
-const scene=new THREE.Scene();scene.background=new THREE.Color(0x01050c);const camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,.05,100);camera.position.set(0,0,3.05);const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.045;controls.enablePan=false;controls.minDistance=1.65;controls.maxDistance=5;controls.rotateSpeed=.45;controls.zoomSpeed=.65;const earthGroup=new THREE.Group();scene.add(earthGroup);log('Earth group attached');
-const earthMaterial=new THREE.MeshBasicMaterial({color:0xffffff});const earthSphere=new THREE.Mesh(new THREE.SphereGeometry(1,96,64),earthMaterial);earthGroup.add(earthSphere);const paleoOcean=new THREE.Mesh(new THREE.SphereGeometry(.998,72,48),new THREE.MeshBasicMaterial({color:0x176d9a}));paleoOcean.visible=false;earthGroup.add(paleoOcean);const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(1.045,72,48),new THREE.MeshBasicMaterial({color:0x4fcfff,transparent:true,opacity:.14,side:THREE.BackSide,depthWrite:false}));earthGroup.add(atmosphere);log('Base globe objects created');
+function setOpacity(group,opacity){if(!group)return;const v=Math.max(0,Math.min(1,opacity));group.traverse(o=>{if(!o.material)return;for(const m of Array.isArray(o.material)?o.material:[o.material]){m.transparent=v<.999;m.opacity=v;m.depthWrite=v>.94}})}
+function blend(a,b,t){if(!a)return;const x=Math.max(0,Math.min(1,t)),e=x*x*(3-2*x);setOpacity(a,1-e);if(b&&b!==a)setOpacity(b,e)}
+function countryByName(name){return modernCountries?.features.find(f=>f.properties?.name===name)||null}
+function setBufferProgress(value,done,total){bufferProgress=Math.max(bufferProgress,Math.min(1,value));if(bufferAmount)bufferAmount.textContent=`${Math.round(bufferProgress*100)}%`;if(bufferFill)bufferFill.style.width=`${bufferProgress*100}%`;if(bufferNote&&!prefetchFinished)bufferNote.textContent=`Loading ${done}/${total} historical frames in the background…`;setPlayAvailability()}
+
+window.addEventListener('error',e=>{console.error(e.error||e.message);logError(e.message||'Unknown window error')});
+window.addEventListener('unhandledrejection',e=>{console.error(e.reason);logError(e.reason?.message||e.reason||'Unknown promise rejection')});
+
+let renderer;
+try{
+  renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.5));
+  renderer.outputColorSpace=THREE.SRGBColorSpace;
+  renderer.toneMapping=THREE.NoToneMapping;
+  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();status.textContent='WEBGL CONTEXT LOST · RELOAD PAGE';log('WEBGL CONTEXT LOST')});
+  canvas.addEventListener('webglcontextrestored',()=>{status.textContent='WEBGL CONTEXT RESTORED · RELOADING';log('WEBGL CONTEXT RESTORED');location.reload()});
+  log('WebGL renderer created');
+}catch(error){logError(error);if(loading)loading.classList.add('done');throw error}
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x01050c);
+const camera=new THREE.PerspectiveCamera(35,innerWidth/innerHeight,.05,100);camera.position.set(0,0,3.05);
+const controls=new OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=.045;controls.enablePan=false;controls.minDistance=1.65;controls.maxDistance=5;controls.rotateSpeed=.45;controls.zoomSpeed=.65;
+const earthGroup=new THREE.Group();scene.add(earthGroup);
+const earthMaterial=new THREE.MeshBasicMaterial({color:0xffffff});
+const earthSphere=new THREE.Mesh(new THREE.SphereGeometry(1,128,96),earthMaterial);earthGroup.add(earthSphere);
+const paleoOcean=new THREE.Mesh(new THREE.SphereGeometry(.998,128,96),new THREE.MeshBasicMaterial({color:0x176d9a}));paleoOcean.visible=false;earthGroup.add(paleoOcean);
+const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(1.045,96,64),new THREE.MeshBasicMaterial({color:0x4fcfff,transparent:true,opacity:.14,side:THREE.BackSide,depthWrite:false}));earthGroup.add(atmosphere);
+
 new THREE.TextureLoader().load('https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg',texture=>{texture.colorSpace=THREE.SRGBColorSpace;earthMaterial.map=texture;earthMaterial.needsUpdate=true;log('Earth texture loaded')},undefined,error=>log('Earth texture unavailable',error?.message||error));
-function resize(){renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}resize();addEventListener('resize',resize);
+
+function resize(){renderer.setSize(innerWidth,innerHeight,false);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix()}
+resize();addEventListener('resize',resize);
+
 async function loadPaleoFrame(ageMa){log('Loading paleo frame',ageMa,'Ma');const[lines,land]=await Promise.all([loadPaleoCoastlines(-ageMa*1e6,'CAO2024'),loadPaleoLand(-ageMa*1e6,'CAO2024')]);setOpacity(lines,1);setOpacity(land,1);log('Paleo frame ready',ageMa,'Ma');return{lines,land}}
-async function ensurePaleoFrame(year){const b=timelineBracket(year),key=`${b.lower}:${b.upper}`;if(key===paleoFrameKey&&paleoFrameA)return;if(key===paleoRequestKey)return;paleoRequestKey=key;const serial=++paleoRequestSerial;log('Requesting paleo bracket',key);try{const[low,high]=await Promise.all([loadPaleoFrame(b.lower),b.upper===b.lower?Promise.resolve(null):loadPaleoFrame(b.upper)]);if(serial!==paleoRequestSerial){disposeLineGroup(low.lines);disposeLineGroup(low.land);if(high){disposeLineGroup(high.lines);disposeLineGroup(high.land)};log('Discarded stale paleo bracket',key);return}for(const f of[paleoFrameA,paleoFrameB])if(f){earthGroup.remove(f.lines,f.land);disposeLineGroup(f.lines);disposeLineGroup(f.land)}paleoFrameA=low;paleoFrameB=high;paleoFrameKey=key;earthGroup.add(low.land,low.lines);if(high)earthGroup.add(high.land,high.lines);low.lines.visible=low.land.visible=true;if(high)high.lines.visible=high.land.visible=true;blend(low.lines,high?.lines,b.t);blend(low.land,high?.land,b.t);log('Displayed paleo bracket',key)}catch(error){logError(`Paleo frame failed: ${error?.message||error}`)}finally{if(paleoRequestKey===key)paleoRequestKey=''}}
-function clearFollowFrames(){for(const g of[followFrameA,followFrameB])if(g){earthGroup.remove(g);disposeLineGroup(g)}followFrameA=followFrameB=null;followFrameKey=''}function scheduleFollowRequest(delay=120){clearTimeout(followRequestTimer);if(followRequestBusy)return;followRequestTimer=setTimeout(()=>{followRequestTimer=0;void processFollowRequest()},delay)}
-function queueFollowCountry(year,immediate=false){followDesiredYear=year;const selected=followSelect?.value;if(!selected||!modernCountries){followDesiredKey='';clearTimeout(followRequestTimer);followRequestSerial++;clearFollowFrames();return}if(year>2026){followDesiredKey='future';if(followFrameA)followFrameA.visible=false;if(followFrameB)followFrameB.visible=false;return}if(year>=-10000){followDesiredKey='present';if(followFrameKey==='present'&&followFrameA){followFrameA.visible=true;setOpacity(followFrameA,1);return}scheduleFollowRequest(immediate?0:80);return}const b=timelineBracket(year);followDesiredKey=`${selected}:${b.lower}:${b.upper}`;if(followFrameKey===followDesiredKey&&followFrameA){followFrameA.visible=true;if(followFrameB)followFrameB.visible=true;blend(followFrameA,followFrameB,b.t);return}scheduleFollowRequest(immediate?0:120)}
-async function processFollowRequest(){if(followRequestBusy)return;const selected=followSelect?.value,desired=followDesiredKey;if(!selected||!modernCountries||!desired||desired==='future')return;if(desired==='present'){const country=countryByName(selected);if(!country)return;followRequestBusy=true;const serial=++followRequestSerial;try{const group=makeCountryHighlight(country,1.012);if(serial!==followRequestSerial){disposeLineGroup(group);return}const old=[followFrameA,followFrameB].filter(Boolean);followFrameA=group;followFrameB=null;followFrameKey='present';earthGroup.add(group);group.visible=true;setOpacity(group,1);old.forEach(g=>{earthGroup.remove(g);disposeLineGroup(g)})}finally{followRequestBusy=false}if(followDesiredKey!==followFrameKey)scheduleFollowRequest(0);return}const b=timelineBracket(followDesiredYear),key=`${selected}:${b.lower}:${b.upper}`;if(key!==desired){scheduleFollowRequest(0);return}followRequestBusy=true;const serial=++followRequestSerial;try{const country=countryByName(selected);if(!country)return;const[low,high]=await Promise.all([loadReconstructedCountry(country,b.lower,'CAO2024'),b.upper===b.lower?Promise.resolve(null):loadReconstructedCountry(country,b.upper,'CAO2024')]);if(serial!==followRequestSerial||followDesiredKey!==key){disposeLineGroup(low);if(high)disposeLineGroup(high);return}const old=[followFrameA,followFrameB].filter(Boolean);followFrameA=low;followFrameB=high;followFrameKey=key;earthGroup.add(low);if(high)earthGroup.add(high);const cb=timelineBracket(followDesiredYear);blend(low,high,cb.t);old.forEach(g=>{earthGroup.remove(g);disposeLineGroup(g)})}catch(error){console.error('[InTheGlobe] Country reconstruction error',error)}finally{followRequestBusy=false}if(followDesiredKey!==followFrameKey)scheduleFollowRequest(0)}
-function updateGeography(year){const historical=year<-10000,future=year>2026;earthSphere.visible=!historical;paleoOcean.visible=historical;atmosphere.visible=atmosphereToggle?.checked??true;if(countryBorders)countryBorders.visible=!!countryToggle?.checked&&!historical&&!future;if(future){status.textContent='SPECULATIVE FUTURE · PANGEA ULTIMA SCENARIO';for(const f of[paleoFrameA,paleoFrameB])if(f){f.lines.visible=false;f.land.visible=false}for(const g of[followFrameA,followFrameB])if(g)g.visible=false;queueFollowCountry(year);return}if(!historical){status.textContent=`MODERN EARTH · ${Math.round(year).toLocaleString()} CE`;for(const f of[paleoFrameA,paleoFrameB])if(f){f.lines.visible=false;f.land.visible=false}queueFollowCountry(year);return}status.textContent=`CAO2024 RECONSTRUCTION · ${Math.round(-year/1e6).toLocaleString()} Ma`;void ensurePaleoFrame(year);if(paleoFrameKey){const b=timelineBracket(year),key=`${b.lower}:${b.upper}`;if(key===paleoFrameKey){blend(paleoFrameA.lines,paleoFrameB?.lines,b.t);blend(paleoFrameA.land,paleoFrameB?.land,b.t)}}queueFollowCountry(year)}
+
+async function ensurePaleoFrame(year){
+  const b=timelineBracket(year),key=`${b.lower}:${b.upper}`;
+  if(key===paleoFrameKey&&paleoFrameA)return;
+  if(key===paleoRequestKey)return;
+  paleoRequestKey=key;
+  const serial=++paleoRequestSerial;
+  log('Requesting paleo bracket',key);
+  try{
+    const[low,high]=await Promise.all([loadPaleoFrame(b.lower),b.upper===b.lower?Promise.resolve(null):loadPaleoFrame(b.upper)]);
+    if(serial!==paleoRequestSerial){disposeLineGroup(low.lines);disposeLineGroup(low.land);if(high){disposeLineGroup(high.lines);disposeLineGroup(high.land)};return}
+    for(const f of[paleoFrameA,paleoFrameB])if(f){earthGroup.remove(f.lines,f.land);disposeLineGroup(f.lines);disposeLineGroup(f.land)}
+    paleoFrameA=low;paleoFrameB=high;paleoFrameKey=key;
+    earthGroup.add(low.land,low.lines);if(high)earthGroup.add(high.land,high.lines);
+    low.lines.visible=low.land.visible=true;if(high)high.lines.visible=high.land.visible=true;
+    blend(low.lines,high?.lines,b.t);blend(low.land,high?.land,b.t);
+    log('Displayed paleo bracket',key);
+  }catch(error){logError(`Paleo frame failed: ${error?.message||error}`)}finally{if(paleoRequestKey===key)paleoRequestKey=''}
+}
+
+function clearFollowFrames(){for(const g of[followFrameA,followFrameB])if(g){earthGroup.remove(g);disposeLineGroup(g)}followFrameA=followFrameB=null;followFrameKey=''}
+function scheduleFollowRequest(delay=120){clearTimeout(followRequestTimer);if(followRequestBusy)return;followRequestTimer=setTimeout(()=>{followRequestTimer=0;void processFollowRequest()},delay)}
+function queueFollowCountry(year,immediate=false){
+  followDesiredYear=year;const selected=followSelect?.value;
+  if(!selected||!modernCountries){followDesiredKey='';clearTimeout(followRequestTimer);followRequestSerial++;clearFollowFrames();return}
+  if(year>2026){followDesiredKey='future';if(followFrameA)followFrameA.visible=false;if(followFrameB)followFrameB.visible=false;return}
+  if(year>=-10000){followDesiredKey='present';if(followFrameKey==='present'&&followFrameA){followFrameA.visible=true;setOpacity(followFrameA,1);return}scheduleFollowRequest(immediate?0:80);return}
+  const b=timelineBracket(year);followDesiredKey=`${selected}:${b.lower}:${b.upper}`;
+  if(followFrameKey===followDesiredKey&&followFrameA){followFrameA.visible=true;if(followFrameB)followFrameB.visible=true;blend(followFrameA,followFrameB,b.t);return}
+  scheduleFollowRequest(immediate?0:120);
+}
+async function processFollowRequest(){
+  if(followRequestBusy)return;
+  const selected=followSelect?.value,desired=followDesiredKey;
+  if(!selected||!modernCountries||!desired||desired==='future')return;
+  if(desired==='present'){
+    const country=countryByName(selected);if(!country)return;
+    followRequestBusy=true;const serial=++followRequestSerial;
+    try{const group=makeCountryHighlight(country,1.012);if(serial!==followRequestSerial){disposeLineGroup(group);return}const old=[followFrameA,followFrameB].filter(Boolean);followFrameA=group;followFrameB=null;followFrameKey='present';earthGroup.add(group);group.visible=true;setOpacity(group,1);old.forEach(g=>{earthGroup.remove(g);disposeLineGroup(g)})}
+    finally{followRequestBusy=false}
+    if(followDesiredKey!==followFrameKey)scheduleFollowRequest(0);return;
+  }
+  const b=timelineBracket(followDesiredYear),key=`${selected}:${b.lower}:${b.upper}`;
+  if(key!==desired){scheduleFollowRequest(0);return}
+  followRequestBusy=true;const serial=++followRequestSerial;
+  try{
+    const country=countryByName(selected);if(!country)return;
+    const[low,high]=await Promise.all([loadReconstructedCountry(country,b.lower,'CAO2024'),b.upper===b.lower?Promise.resolve(null):loadReconstructedCountry(country,b.upper,'CAO2024')]);
+    if(serial!==followRequestSerial||followDesiredKey!==key){disposeLineGroup(low);if(high)disposeLineGroup(high);return}
+    const old=[followFrameA,followFrameB].filter(Boolean);followFrameA=low;followFrameB=high;followFrameKey=key;earthGroup.add(low);if(high)earthGroup.add(high);const cb=timelineBracket(followDesiredYear);blend(low,high,cb.t);old.forEach(g=>{earthGroup.remove(g);disposeLineGroup(g)})
+  }catch(error){console.error('[InTheGlobe] Country reconstruction error',error)}finally{followRequestBusy=false}
+  if(followDesiredKey!==followFrameKey)scheduleFollowRequest(0);
+}
+
+function updateGeography(year){
+  const historical=year<-10000,future=year>2026;
+  earthSphere.visible=!historical;paleoOcean.visible=historical;atmosphere.visible=atmosphereToggle?.checked??true;
+  if(countryBorders)countryBorders.visible=!!countryToggle?.checked&&!historical&&!future;
+  if(future){status.textContent='SPECULATIVE FUTURE · PANGEA ULTIMA SCENARIO';for(const f of[paleoFrameA,paleoFrameB])if(f){f.lines.visible=false;f.land.visible=false}for(const g of[followFrameA,followFrameB])if(g)g.visible=false;queueFollowCountry(year);return}
+  if(!historical){status.textContent=`MODERN EARTH · ${Math.round(year).toLocaleString()} CE`;for(const f of[paleoFrameA,paleoFrameB])if(f){f.lines.visible=false;f.land.visible=false}queueFollowCountry(year);return}
+  status.textContent=`CAO2024 RECONSTRUCTION · ${Math.round(-year/1e6).toLocaleString()} Ma`;
+  void ensurePaleoFrame(year);
+  if(paleoFrameKey){const b=timelineBracket(year),key=`${b.lower}:${b.upper}`;if(key===paleoFrameKey){blend(paleoFrameA.lines,paleoFrameB?.lines,b.t);blend(paleoFrameA.land,paleoFrameB?.land,b.t)}}
+  queueFollowCountry(year);
+}
+
 function filterCountries(){if(!modernCountries||!followSelect)return;const q=(countrySearch?.value||'').trim().toLowerCase(),current=followSelect.value||savedPreferences.country||'';followSelect.innerHTML='<option value="">None</option>';const sorted=modernCountries.features.filter(f=>f.properties?.name).sort((a,b)=>a.properties.name.localeCompare(b.properties.name,'en',{sensitivity:'base'}));for(const f of sorted){const name=f.properties.name;if(!q||name.toLowerCase().includes(q)){const o=document.createElement('option');o.value=name;o.textContent=name;followSelect.appendChild(o)}}if([...followSelect.options].some(o=>o.value===current))followSelect.value=current}
-let time=new TimeController({slider:document.querySelector('#timeline'),yearInput:document.querySelector('#yearInput'),yearOutput:document.querySelector('#year'),epoch:document.querySelector('#epoch'),playButton:document.querySelector('#play'),onChange:year=>{savePreferences({year:Math.round(year)});updateGeography(year)}});const resetStartYear=window.__intheglobeResetVideoStartYear;if(Number.isFinite(resetStartYear)){time.setYear(resetStartYear);delete window.__intheglobeResetVideoStartYear;log('Reset video boot year applied')}else if(Number.isFinite(savedPreferences.year))time.setYear(savedPreferences.year);if(Number.isFinite(savedPreferences.speed))time.speed=savedPreferences.speed;const setPlayAvailability=()=>{time.playButton.disabled=false;time.playButton.textContent=time.playing?'❚❚ Pause':'▶ Play';time.playButton.title='Play from the current timeline position'};setPlayAvailability();const originalToggle=time.toggle.bind(time);time.toggle=()=>{originalToggle();savePreferences({playing:time.playing,speed:time.speed});setPlayAvailability()};
-document.querySelectorAll('#speeds [data-speed]').forEach(button=>button.addEventListener('click',()=>savePreferences({speed:time.speed})));document.querySelector('#jumpPresent')?.addEventListener('click',()=>time.setYear(2026));document.querySelector('#heat')?.addEventListener('change',e=>savePreferences({heat:e.target.checked}));atmosphereToggle?.addEventListener('change',e=>{atmosphere.visible=e.target.checked;savePreferences({atmosphere:e.target.checked})});document.querySelector('#terrain')?.addEventListener('change',e=>savePreferences({terrain:e.target.checked}));countryToggle?.addEventListener('change',()=>savePreferences({borders:countryToggle.checked}));followSelect?.addEventListener('change',()=>{savePreferences({country:followSelect.value||''});followRequestSerial++;followDesiredKey='';clearTimeout(followRequestTimer);clearFollowFrames();queueFollowCountry(time.year,true)});countrySearch?.addEventListener('input',filterCountries);const hud=document.querySelector('#hud');document.querySelector('#collapse')?.addEventListener('click',()=>hud?.classList.add('hidden'));document.querySelector('#dock')?.addEventListener('click',()=>hud?.classList.remove('hidden'));canvas.addEventListener('dblclick',()=>{if(time.playing){time.toggle();savePreferences({playing:false,speed:time.speed});setPlayAvailability()}controls.reset();camera.position.set(0,0,3.05)});
-if(bufferAmount)bufferAmount.textContent='ON DEMAND';if(bufferFill)bufferFill.style.width='0%';if(bufferNote)bufferNote.textContent='Historical frames load as you move through time.';
-log('Loading modern country data');loadModernCountries().then(countries=>{modernCountries=countries;filterCountries();log('Modern country data ready');return loadModernCountryBorders()}).then(group=>{countryBorders=group;earthGroup.add(group);countryBorders.visible=!!countryToggle?.checked&&time.year>=-10000&&time.year<=2026;log('Modern borders ready')}).catch(error=>logError(`Country data failed: ${error?.message||error}`));
-function frame(now){time.update(now);controls.update();renderer.render(scene,camera);requestAnimationFrame(frame)}requestAnimationFrame(frame);updateGeography(time.year);log('Application initialisation complete');if(loading)loading.classList.add('done');
+
+let time=new TimeController({slider:document.querySelector('#timeline'),yearInput:document.querySelector('#yearInput'),yearOutput:document.querySelector('#year'),epoch:document.querySelector('#epoch'),playButton:document.querySelector('#play'),onChange:year=>{savePreferences({year:Math.round(year)});updateGeography(year)}});
+const resetStartYear=window.__intheglobeResetVideoStartYear;
+if(Number.isFinite(resetStartYear)){time.setYear(resetStartYear);delete window.__intheglobeResetVideoStartYear;log('Reset video boot year applied')}else if(Number.isFinite(savedPreferences.year))time.setYear(savedPreferences.year);
+if(Number.isFinite(savedPreferences.speed))time.speed=savedPreferences.speed;
+const setPlayAvailability=()=>{time.playButton.disabled=bufferProgress<.5;time.playButton.textContent=bufferProgress>=.5?(time.playing?'❚❚ Pause':'▶ Play'):'🚫 Play';time.playButton.title=bufferProgress>=.5?'Play the geological timeline':'Playback unlocks at 50% background buffer'};
+setPlayAvailability();
+const originalToggle=time.toggle.bind(time);time.toggle=()=>{if(!time.playing&&bufferProgress<.5){setPlayAvailability();return}originalToggle();savePreferences({playing:time.playing,speed:time.speed});setPlayAvailability()};
+
+document.querySelectorAll('#speeds [data-speed]').forEach(button=>button.addEventListener('click',()=>savePreferences({speed:time.speed})));
+document.querySelector('#jumpPresent')?.addEventListener('click',()=>time.setYear(2026));
+document.querySelector('#heat')?.addEventListener('change',e=>savePreferences({heat:e.target.checked}));
+atmosphereToggle?.addEventListener('change',e=>{atmosphere.visible=e.target.checked;savePreferences({atmosphere:e.target.checked})});
+document.querySelector('#terrain')?.addEventListener('change',e=>savePreferences({terrain:e.target.checked}));
+countryToggle?.addEventListener('change',()=>savePreferences({borders:countryToggle.checked}));
+followSelect?.addEventListener('change',()=>{savePreferences({country:followSelect.value||''});followRequestSerial++;followDesiredKey='';clearTimeout(followRequestTimer);clearFollowFrames();queueFollowCountry(time.year,true)});
+countrySearch?.addEventListener('input',filterCountries);
+const hud=document.querySelector('#hud');document.querySelector('#collapse')?.addEventListener('click',()=>hud?.classList.add('hidden'));document.querySelector('#dock')?.addEventListener('click',()=>hud?.classList.remove('hidden'));
+canvas.addEventListener('dblclick',()=>{if(time.playing){time.toggle();savePreferences({playing:false,speed:time.speed});setPlayAvailability()}controls.reset();camera.position.set(0,0,3.05)});
+
+const backgroundAges=timelineAges();
+if(bufferAmount)bufferAmount.textContent='0%';
+if(bufferFill)bufferFill.style.width='0%';
+if(bufferNote)bufferNote.textContent=`Preparing ${backgroundAges.length} historical frames in the background…`;
+Promise.resolve().then(async()=>{
+  try{
+    const complete=await prefetchPaleoFrames(backgroundAges,'CAO2024',2,(progress,done,total)=>setBufferProgress(progress,done,total));
+    prefetchFinished=complete;
+    bufferProgress=1;
+    setBufferProgress(1,backgroundAges.length,backgroundAges.length);
+    if(bufferNote)bufferNote.textContent=`Historical video buffer ready · ${backgroundAges.length} frames cached`;
+    setPlayAvailability();
+    log('Background paleo buffer complete');
+  }catch(error){logError(`Background paleo prefetch failed: ${error?.message||error}`);}
+})();
+
+log('Loading modern country data');
+loadModernCountries().then(countries=>{modernCountries=countries;filterCountries();log('Modern country data ready');return loadModernCountryBorders()}).then(group=>{countryBorders=group;earthGroup.add(group);countryBorders.visible=!!countryToggle?.checked&&time.year>=-10000&&time.year<=2026;log('Modern borders ready')}).catch(error=>logError(`Country data failed: ${error?.message||error}`));
+
+function frame(now){time.update(now);controls.update();renderer.render(scene,camera);requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+updateGeography(time.year);
+log('Application initialisation complete');
+if(loading)loading.classList.add('done');
