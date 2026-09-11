@@ -40,10 +40,10 @@ function addGeometryLines(group,geometry,radius,material){
     }
   }
   if(!positions.length)return;
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
-  geo.computeBoundingSphere();
-  const line=new THREE.LineSegments(geo,material);
+  const geometryBuffer=new THREE.BufferGeometry();
+  geometryBuffer.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+  geometryBuffer.computeBoundingSphere();
+  const line=new THREE.LineSegments(geometryBuffer,material);
   line.renderOrder=20;
   group.add(line);
 }
@@ -59,8 +59,7 @@ function makeGeoTexture(data,{fill=null,stroke='rgba(70,183,255,.90)',lineWidth=
   if(stroke&&lineWidth>0){ctx.strokeStyle=stroke;ctx.lineWidth=lineWidth;ctx.lineJoin='round';ctx.lineCap='round';}
   if(data){ctx.beginPath();path(data);if(fill)ctx.fill('evenodd');if(stroke&&lineWidth>0)ctx.stroke();}
   const texture=new THREE.CanvasTexture(canvas);
-  texture.colorSpace=THREE.SRGBColorSpace;
-  texture.needsUpdate=true;
+  texture.colorSpace=THREE.SRGBColorSpace;texture.needsUpdate=true;
   texture.minFilter=THREE.LinearFilter;texture.magFilter=THREE.LinearFilter;texture.generateMipmaps=false;
   return texture;
 }
@@ -76,22 +75,18 @@ function openPersistentDB(){
   if(openPersistentDB.promise)return openPersistentDB.promise;
   openPersistentDB.promise=new Promise((resolve,reject)=>{
     const request=indexedDB.open(CACHE_DB,1);
-    request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains(CACHE_STORE))db.createObjectStore(CACHE_STORE);};
+    request.onupgradeneeded=()=>{const db=request.result;if(!db.objectStoreNames.contains(CACHE_STORE))db.createObjectStore(CACHE_STORE)};
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error||new Error('IndexedDB unavailable'));
   });
   return openPersistentDB.promise;
 }
 async function persistentGet(key){
-  try{
-    const db=await openPersistentDB();if(!db)return null;
-    return await new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readonly'),req=tx.objectStore(CACHE_STORE).get(key);req.onsuccess=()=>resolve(req.result??null);req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));});
-  }catch{return null}
+  try{const db=await openPersistentDB();if(!db)return null;return await new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readonly'),req=tx.objectStore(CACHE_STORE).get(key);req.onsuccess=()=>resolve(req.result??null);req.onerror=()=>reject(req.error||new Error('IndexedDB read failed'));});}
+  catch{return null}
 }
 async function persistentPut(key,value){
-  try{
-    const db=await openPersistentDB();if(!db)return;
-    await new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).put(value,key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('IndexedDB write failed'));});
-  }catch{}
+  try{const db=await openPersistentDB();if(!db)return;await new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).put(value,key);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error||new Error('IndexedDB write failed'));});}
+  catch{}
 }
 let modernCountriesPromise=null;
 export async function loadModernCountries(){
@@ -139,7 +134,6 @@ export async function prefetchPaleoFrames(ages,model='CAO2024',concurrency=2,onP
   const worker=async()=>{while(true){const index=next++;if(index>=list.length)return;const age=list[index];try{await getPaleoData(-age*1e6,model)}catch(error){failed++;console.warn('[InTheGlobe] Background paleo frame failed',age,error);}completed++;onProgress((completed-failed)/list.length,completed-failed,list.length,age);await new Promise(resolve=>setTimeout(resolve,25));}};
   await Promise.all(Array.from({length:Math.min(Math.max(1,concurrency),list.length)},worker));return failed===0;
 }
-export async function prefetchReconstructedCountryFrames(){return true;}
 
 const reconstructedCountryCache=new Map();
 function countryParts(countryFeature){const g=countryFeature?.geometry;if(!g)return[];if(g.type==='MultiPolygon')return g.coordinates.map((coordinates,index)=>({type:'Feature',properties:{...(countryFeature.properties||{}),__countryPart:index+1},geometry:{type:'Polygon',coordinates}}));return[{...countryFeature,properties:{...(countryFeature.properties||{})}}];}
@@ -148,10 +142,57 @@ async function reconstructFeatureCollection(fc,timeMa,model='CAO2024'){
   const key=`country:${model}:${Math.round(timeMa*2)/2}:${hashText(JSON.stringify(fc.features.map(f=>f.geometry)))}`;
   if(reconstructedCountryCache.has(key))return reconstructedCountryCache.get(key);
   const persisted=await persistentGet(key);if(persisted){reconstructedCountryCache.set(key,Promise.resolve(persisted));return persisted;}
-  const promise=(async()=>{const errors=[];for(const base of GWS_SERVERS){try{const response=await fetch(`${base}reconstruct_feature_collection`,{method:'POST',body:new URLSearchParams({feature_collection:JSON.stringify(fc),time:String(timeMa),model}),cache:'no-store'});if(!response.ok)throw new Error(`GPlates reconstruction HTTP ${response.status}`);const data=await response.json();void persistentPut(key,data);return data;}catch(error){errors.push(error?.message||String(error));}}throw new Error(`Country reconstruction failed · ${errors.join(' · ')}`);})();
+  const promise=(async()=>{
+    const errors=[];
+    for(const base of GWS_SERVERS){
+      try{
+        const response=await fetch(`${base}reconstruct_feature_collection`,{method:'POST',body:new URLSearchParams({feature_collection:JSON.stringify(fc),time:String(timeMa),model}),cache:'no-store'});
+        if(!response.ok)throw new Error(`GPlates reconstruction HTTP ${response.status}`);
+        const data=await response.json();
+        if(!data||typeof data!=='object')throw new Error('GPlates reconstruction returned invalid JSON');
+        void persistentPut(key,data);
+        return data;
+      }catch(error){errors.push(error?.message||String(error));}
+    }
+    throw new Error(`Country reconstruction failed · ${errors.join(' · ')}`);
+  })();
   reconstructedCountryCache.set(key,promise);return promise;
 }
 export async function loadReconstructedCountry(countryFeature,timeMa,model='CAO2024',radius=1.016){const parts=countryParts(countryFeature);if(!parts.length)throw new Error('Country has no reconstructable geometry');const reconstructed=await Promise.all(parts.map(part=>reconstructFeatureCollection({type:'FeatureCollection',features:[part]},timeMa,model)));return makeCountryHighlight({type:'FeatureCollection',features:reconstructed.flatMap(fc=>fc.features||[])},radius);}
+export async function loadReconstructedCountryBorders(countryCollection,timeMa,model='CAO2024',radius=1.012){
+  if(!countryCollection?.features?.length)throw new Error('No modern country geometry available');
+  const key=`country-borders:${model}:${Math.round(timeMa*2)/2}:${hashText(JSON.stringify(countryCollection.features.map(f=>f.geometry)))}`;
+  if(reconstructedCountryCache.has(key))return reconstructedCountryCache.get(key);
+  const persisted=await persistentGet(key);
+  if(persisted){
+    const group=new THREE.Group();
+    addGeometryLines(group,persisted,radius,new THREE.LineBasicMaterial({color:0xb7d8e8,transparent:true,opacity:.82,depthWrite:false}));
+    reconstructedCountryCache.set(key,Promise.resolve(persisted));
+    return group;
+  }
+  const promise=(async()=>{
+    let data=null;const errors=[];
+    const payload=JSON.stringify({type:'FeatureCollection',features:countryCollection.features});
+    for(const base of GWS_SERVERS){
+      try{
+        const response=await fetch(`${base}reconstruct_feature_collection`,{method:'POST',body:new URLSearchParams({feature_collection:payload,time:String(timeMa),model}),cache:'no-store'});
+        if(!response.ok)throw new Error(`GPlates reconstruction HTTP ${response.status}`);
+        data=await response.json();
+        if(!data||data.type!=='FeatureCollection'||!Array.isArray(data.features))throw new Error('GPlates returned invalid reconstructed country GeoJSON');
+        break;
+      }catch(error){errors.push(`${new URL(base).hostname}: ${error?.message||error}`);}
+    }
+    if(!data)throw new Error(`Historical country borders failed · ${errors.join(' · ')}`);
+    await persistentPut(key,data);
+    return data;
+  })();
+  reconstructedCountryCache.set(key,promise);
+  const data=await promise;
+  const group=new THREE.Group();
+  addGeometryLines(group,data,radius,new THREE.LineBasicMaterial({color:0xb7d8e8,transparent:true,opacity:.82,depthWrite:false}));
+  return group;
+}
+export function prefetchReconstructedCountryFrames(countryFeature,agesMa,model='CAO2024',concurrency=12,onProgress){return Promise.resolve(true);}
 export function makeCountryHighlight(data,radius=1.012){return textureGlobe(data,radius,{fill:'rgba(255,20,147,.42)',stroke:'rgba(255,20,147,1)',lineWidth:2,size:4096});}
 export function disposeLineGroup(group){if(!group)return;group.traverse(o=>{if(o.geometry)o.geometry.dispose();if(o.material){if(Array.isArray(o.material))o.material.forEach(m=>m.dispose());else o.material.dispose();}if(o.userData?.__texture)o.userData.__texture.dispose();});}
 export function timelineCachedProgress(){return 0;}
