@@ -1,7 +1,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
 import {OrbitControls} from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/OrbitControls.js';
 import {TimeController} from './time_controller.js';
-import {loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,loadReconstructedCountry,makeCountryHighlight,disposeLineGroup,timelineBracket,timelineAges,prefetchPaleoFrames} from './geography.js?v=20260911-3';
+import {loadModernCountries,loadModernCountryBorders,loadPaleoCoastlines,loadPaleoLand,loadReconstructedCountry,loadReconstructedCountryBorders,makeCountryHighlight,disposeLineGroup,timelineBracket,timelineAges,prefetchPaleoFrames} from './geography.js?v=20260911-4';
 
 const canvas=document.querySelector('#globe');
 const loading=document.querySelector('#loading');
@@ -25,6 +25,7 @@ function savePreferences(patch){preferences={...preferences,...patch};try{localS
 function debug(...args){const text=args.map(value=>{try{return typeof value==='string'?value:JSON.stringify(value)}catch{return String(value)}}).join(' ');console.log('[PastGlobe]',text);if(debugLog){const row=document.createElement('div');row.textContent=`[${new Date().toLocaleTimeString()}] ${text}`;debugLog.appendChild(row);debugLog.scrollTop=debugLog.scrollHeight}}
 function readBuffer(total){try{const x=JSON.parse(localStorage.getItem(BUFFER_KEY)||'null');if(x&&x.total===total&&Number.isFinite(x.completed))return Math.max(0,Math.min(1,x.completed/total))}catch{}return 0}
 function writeBuffer(completed,total){try{localStorage.setItem(BUFFER_KEY,JSON.stringify({version:3,total,completed,updatedAt:Date.now()}))}catch{}}
+function setPlayAvailability(){const button=time?.playButton;if(!button)return;const ready=bufferProgress>=PLAY_THRESHOLD;button.disabled=!ready;button.textContent=ready?(time.playing?'❚❚ Pause':'▶ Play'):'🚫 Play';button.title=ready?'Play the geological timeline':'Playback unlocks at 50% background buffer'}
 function showBuffer(value,done,total){bufferProgress=Math.max(bufferProgress,Math.max(0,Math.min(1,value)));if(bufferAmount)bufferAmount.textContent=`${Math.round(bufferProgress*100)}%`;if(bufferFill)bufferFill.style.width=`${bufferProgress*100}%`;if(bufferNote&&!prefetchDone)bufferNote.textContent=`Loading ${done}/${total} historical frames in the background…`;setPlayAvailability()}
 function setOpacity(group,value){if(!group)return;const v=Math.max(0,Math.min(1,value));group.traverse(object=>{if(!object.material)return;const list=Array.isArray(object.material)?object.material:[object.material];for(const material of list){material.transparent=v<.999;material.opacity=v;material.depthWrite=v>.94}})}
 function blend(a,b,t){if(!a)return;const x=Math.max(0,Math.min(1,t));const e=x*x*(3-2*x);setOpacity(a,1-e);if(b&&b!==a)setOpacity(b,e)}
@@ -49,8 +50,7 @@ scene.add(earthGroup);
 window.__intheglobeEarthGroup=earthGroup;
 const earthMaterial=new THREE.MeshBasicMaterial({color:0xffffff});
 const earthSphere=new THREE.Mesh(new THREE.SphereGeometry(1,160,112),earthMaterial);
-earthSphere.renderOrder=0;
-earthGroup.add(earthSphere);
+earthSphere.renderOrder=0;earthGroup.add(earthSphere);
 const paleoOcean=new THREE.Mesh(new THREE.SphereGeometry(.998,160,112),new THREE.MeshBasicMaterial({color:0x176d9a}));
 paleoOcean.visible=false;paleoOcean.renderOrder=1;earthGroup.add(paleoOcean);
 const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(1.045,96,64),new THREE.MeshBasicMaterial({color:0x4fcfff,transparent:true,opacity:.14,side:THREE.BackSide,depthWrite:false}));
@@ -64,6 +64,12 @@ let paleoB=null;
 let paleoKey='';
 let paleoRequestKey='';
 let paleoRequestSerial=0;
+let historicalBordersA=null;
+let historicalBordersB=null;
+let historicalBordersKey='';
+let historicalBordersRequestKey='';
+let historicalBordersRequestSerial=0;
+let historicalBordersBusy=false;
 let followA=null;
 let followB=null;
 let followKey='';
@@ -75,10 +81,11 @@ let bufferProgress=0;
 let prefetchDone=false;
 let prefetchRunning=false;
 let followTimer=0;
+let time=null;
 
 function countryByName(name){return modernCountries?.features.find(f=>f.properties?.name===name)||null}
-function setPlayAvailability(){const button=time?.playButton;if(!button)return;const ready=bufferProgress>=PLAY_THRESHOLD;button.disabled=!ready;button.textContent=ready?(time.playing?'❚❚ Pause':'▶ Play'):'🚫 Play';button.title=ready?'Play the geological timeline':'Playback unlocks at 50% background buffer'}
 function clearPaleoFrames(){for(const frame of[paleoA,paleoB])if(frame){earthGroup.remove(frame.land,frame.lines);disposeLineGroup(frame.land);disposeLineGroup(frame.lines)}paleoA=paleoB=null;paleoKey=''}
+function clearHistoricalBorders(){for(const group of[historicalBordersA,historicalBordersB])if(group){earthGroup.remove(group);disposeLineGroup(group)}historicalBordersA=historicalBordersB=null;historicalBordersKey=''}
 function clearFollowFrames(){for(const frame of[followA,followB])if(frame){earthGroup.remove(frame);disposeLineGroup(frame)}followA=followB=null;followKey=''}
 
 async function loadPaleoFrame(age){
@@ -99,19 +106,44 @@ async function showPaleo(year){
     clearPaleoFrames();paleoA=low;paleoB=high;paleoKey=key;earthGroup.add(low.land,low.lines);if(high)earthGroup.add(high.land,high.lines);low.land.visible=low.lines.visible=true;if(high)high.land.visible=high.lines.visible=true;blend(low.land,high?.land,bracket.t);blend(low.lines,high?.lines,bracket.t);debug('Paleo frame rendered',key)
   }catch(error){if(serial===paleoRequestSerial){status.textContent='CAO2024 DATA ERROR';debug('Paleo rendering failed',error?.stack||error)}}finally{if(paleoRequestKey===key)paleoRequestKey=''}
 }
-function scheduleFollow(year,immediate=false){followWantedYear=year;clearTimeout(followTimer);followTimer=setTimeout(()=>void updateFollow(year),immediate?0:100)}
+
+async function showHistoricalCountryBorders(year){
+  if(!modernCountries||!countryToggle?.checked)return;
+  const bracket=timelineBracket(year);
+  const key=`${bracket.lower}:${bracket.upper}`;
+  if(key===historicalBordersKey&&historicalBordersA)return;
+  if(historicalBordersBusy&&historicalBordersRequestKey===key)return;
+  historicalBordersRequestKey=key;
+  const serial=++historicalBordersRequestSerial;
+  historicalBordersBusy=true;
+  try{
+    const [low,high]=await Promise.all([
+      loadReconstructedCountryBorders(modernCountries,bracket.lower,'CAO2024',1.012),
+      bracket.upper===bracket.lower?Promise.resolve(null):loadReconstructedCountryBorders(modernCountries,bracket.upper,'CAO2024',1.012)
+    ]);
+    if(serial!==historicalBordersRequestSerial){disposeLineGroup(low);if(high)disposeLineGroup(high);return}
+    clearHistoricalBorders();
+    historicalBordersA=low;historicalBordersB=high;historicalBordersKey=key;
+    earthGroup.add(low);if(high)earthGroup.add(high);
+    low.visible=true;if(high)high.visible=true;
+    blend(low,high,bracket.t);
+    debug('Historical country borders rendered',key);
+  }catch(error){if(serial===historicalBordersRequestSerial)debug('Historical country border reconstruction failed',error?.stack||error)}
+  finally{historicalBordersBusy=false;if(historicalBordersRequestKey===key)historicalBordersRequestKey=''}
+}
+
 async function updateFollow(year){
   const selected=followSelect?.value;
   const country=countryByName(selected);
   if(!selected||!country||year>PRESENT){clearFollowFrames();return}
-  if(year>=-10000){
+  if(year>=0){
     const key='present';
     if(key===followKey&&followA){followA.visible=true;return}
     const serial=++followSerial;const group=makeCountryHighlight(country,1.012);if(serial!==followSerial){disposeLineGroup(group);return}
-    clearFollowFrames();followA=group;followKey=key;earthGroup.add(group);group.visible=true;setOpacity(group,1);return
+    clearFollowFrames();followA=group;followB=null;followKey=key;earthGroup.add(group);group.visible=true;setOpacity(group,1);return
   }
   const bracket=timelineBracket(year);const key=`${selected}:${bracket.lower}:${bracket.upper}`;
-  if(key===followKey&&followA){followA.visible=followB?true:true;if(followB)followB.visible=true;blend(followA,followB,bracket.t);return}
+  if(key===followKey&&followA){followA.visible=true;if(followB)followB.visible=true;blend(followA,followB,bracket.t);return}
   if(followBusy)return;
   followBusy=true;const serial=++followSerial;
   try{
@@ -120,17 +152,41 @@ async function updateFollow(year){
     clearFollowFrames();followA=low;followB=high;followKey=key;earthGroup.add(low);if(high)earthGroup.add(high);low.visible=true;if(high)high.visible=true;blend(low,high,bracket.t)
   }catch(error){debug('Country tracking failed',error?.message||error)}finally{followBusy=false}
 }
+function scheduleFollow(year,immediate=false){followWantedYear=year;clearTimeout(followTimer);followTimer=setTimeout(()=>void updateFollow(year),immediate?0:100)}
+
 function updateGeography(year){
   const historical=year<0;
   const future=year>PRESENT;
   earthSphere.visible=!historical&&!future;
   paleoOcean.visible=historical||future;
   atmosphere.visible=atmosphereToggle?.checked??true;
-  if(countryBorders)countryBorders.visible=!!countryToggle?.checked&&!historical&&!future;
-  if(future){status.textContent='SPECULATIVE FUTURE · PANGEA ULTIMA SCENARIO';for(const f of[paleoA,paleoB])if(f){f.land.visible=false;f.lines.visible=false}for(const f of[followA,followB])if(f)f.visible=false;return}
-  for(const f of[paleoA,paleoB])if(f){f.land.visible=historical;f.lines.visible=historical}
-  if(historical){showPaleo(year);if(followSelect?.value)scheduleFollow(year)}
-  else{clearTimeout(followTimer);if(paleoA||paleoB){for(const f of[paleoA,paleoB])if(f){f.land.visible=false;f.lines.visible=false}}if(followSelect?.value)scheduleFollow(year);status.textContent=`MODERN EARTH · ${Math.round(year).toLocaleString()} CE`}
+  if(future){
+    status.textContent='SPECULATIVE FUTURE · PANGEA ULTIMA SCENARIO';
+    for(const f of[paleoA,paleoB])if(f){f.land.visible=false;f.lines.visible=false}
+    for(const g of[historicalBordersA,historicalBordersB])if(g)g.visible=false;
+    for(const g of[followA,followB])if(g)g.visible=false;
+    if(countryBorders)countryBorders.visible=false;
+    return;
+  }
+  if(!historical){
+    status.textContent=`MODERN EARTH · ${Math.round(year).toLocaleString()} CE`;
+    for(const f of[paleoA,paleoB])if(f){f.land.visible=false;f.lines.visible=false}
+    for(const g of[historicalBordersA,historicalBordersB])if(g)g.visible=false;
+    if(countryBorders)countryBorders.visible=!!countryToggle?.checked;
+    if(followSelect?.value)scheduleFollow(year);
+    return;
+  }
+  const bracket=timelineBracket(year);
+  status.textContent=`CAO2024 RECONSTRUCTION · ${Math.round(-year/1e6).toLocaleString()} Ma`;
+  if(paleoA&&paleoKey===`${bracket.lower}:${bracket.upper}`){
+    paleoA.land.visible=paleoA.lines.visible=true;
+    if(paleoB)paleoB.land.visible=paleoB.lines.visible=true;
+    blend(paleoA.land,paleoB?.land,bracket.t);blend(paleoA.lines,paleoB?.lines,bracket.t);
+  }else showPaleo(year);
+  if(countryBorders)countryBorders.visible=false;
+  for(const g of[historicalBordersA,historicalBordersB])if(g)g.visible=!!countryToggle?.checked;
+  showHistoricalCountryBorders(year);
+  if(followSelect?.value)scheduleFollow(year);
 }
 
 function filterCountries(){
@@ -151,7 +207,7 @@ time.slider?.addEventListener('input',()=>savePreferences({playing:false}));
 followSelect?.addEventListener('change',()=>{savePreferences({country:followSelect.value||''});followSerial++;clearFollowFrames();scheduleFollow(time.year,true)});
 countrySearch?.addEventListener('input',filterCountries);
 atmosphereToggle?.addEventListener('change',event=>{atmosphere.visible=event.target.checked;savePreferences({atmosphere:event.target.checked})});
-countryToggle?.addEventListener('change',()=>{if(countryBorders)countryBorders.visible=countryToggle.checked&&time.year>=0&&time.year<=PRESENT;savePreferences({borders:countryToggle.checked})});
+countryToggle?.addEventListener('change',()=>{if(time.year<0){for(const g of[historicalBordersA,historicalBordersB])if(g)g.visible=countryToggle.checked;showHistoricalCountryBorders(time.year)}else if(countryBorders)countryBorders.visible=countryToggle.checked&&time.year<=PRESENT;savePreferences({borders:countryToggle.checked})});
 document.querySelector('#jumpPresent')?.addEventListener('click',()=>time.setYear(PRESENT));
 document.querySelectorAll('#speeds [data-speed]').forEach(button=>button.addEventListener('click',()=>savePreferences({speed:time.speed})));
 const hud=document.querySelector('#hud');document.querySelector('#collapse')?.addEventListener('click',()=>hud?.classList.add('hidden'));document.querySelector('#dock')?.addEventListener('click',()=>hud?.classList.remove('hidden'));canvas.addEventListener('dblclick',()=>{controls.reset();camera.position.set(0,0,3.05)});
@@ -168,7 +224,7 @@ async function startPrefetch(){
     const complete=await prefetchPaleoFrames(backgroundAges,'CAO2024',2,(progress,done,total)=>{writeBuffer(done,total);showBuffer(progress,done,total)});
     if(complete){prefetchDone=true;bufferProgress=1;writeBuffer(backgroundAges.length,backgroundAges.length);showBuffer(1,backgroundAges.length,backgroundAges.length);if(bufferNote)bufferNote.textContent=`Historical frames ready · ${backgroundAges.length} cached`;setPlayAvailability()}
     else if(bufferNote)bufferNote.textContent=`Historical buffer incomplete · ${Math.round(bufferProgress*100)}% cached; failed frames will retry`;
-  }catch(error){debug('Background historical buffer failed',error?.message||error);}
+  }catch(error){debug('Background historical buffer failed',error?.message||error)}
 }
 void startPrefetch();
 
